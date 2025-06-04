@@ -1,7 +1,7 @@
 const puppeteer = require("puppeteer");
 const fs = require("fs");
 const readline = require("readline");
-const { OpenAI } = require("openai");
+const { OpenAI } = require("./custom_openai_client");
 require("dotenv").config();
 
 class WebAgent {
@@ -310,7 +310,7 @@ Always explain what you see and what action you're taking.`;
       }
 
       const response = await this.openai.chat.completions.create({
-        model: "gpt-4-vision-preview",
+        model: "gpt-4o",
         messages: messages,
         max_tokens: 1000,
         temperature: 0.1,

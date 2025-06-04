@@ -2,6 +2,8 @@
 
 An AI-powered web browser agent that combines GPT-4V and Puppeteer to browse the web, take screenshots, interact with web elements, and perform automated tasks.
 
+**✨ Now supports custom OpenAI-compatible APIs! ✨**
+
 ## Features
 
 - **Screenshot Capture**: Take high-quality screenshots of web pages
@@ -9,6 +11,7 @@ An AI-powered web browser agent that combines GPT-4V and Puppeteer to browse the
 - **Interactive Web Agent**: Click buttons, fill forms, navigate websites automatically
 - **Element Highlighting**: Automatically highlight and number interactive elements
 - **Conversational Interface**: Chat with the AI agent to perform web tasks
+- **Custom API Support**: Works with OpenAI-compatible APIs (configured for api.omnia.reainternal.net)
 
 ## Components
 
@@ -24,13 +27,18 @@ Python script that combines screenshot capture with GPT-4V analysis.
 
 Advanced interactive web agent with full browsing capabilities.
 
+### 4. Custom API Clients
+
+- `custom_openai_client.py` - Python client for OpenAI-compatible APIs
+- `custom_openai_client.js` - Node.js client for OpenAI-compatible APIs
+
 ## Setup
 
 ### Prerequisites
 
 - Node.js (v16 or higher)
 - Python 3.7 or higher
-- OpenAI API key with GPT-4V access
+- API key for OpenAI-compatible service (configured for api.omnia.reainternal.net)
 
 ### Installation
 
@@ -52,10 +60,43 @@ Advanced interactive web agent with full browsing capabilities.
    ```bash
    cp env.example .env
    ```
-   Edit `.env` and add your OpenAI API key:
+   Edit `.env` and add your API key:
    ```
    OPENAI_API_KEY=your_actual_api_key_here
    ```
+
+## API Configuration
+
+This project is pre-configured to work with the OpenAI-compatible API at `https://api.omnia.reainternal.net`. The custom clients automatically route requests to this endpoint while maintaining full compatibility with the OpenAI SDK interface.
+
+### Custom API Features
+
+- **Automatic Endpoint Routing**: Requests are automatically sent to api.omnia.reainternal.net
+- **Full Compatibility**: Same interface as OpenAI SDK
+- **Error Handling**: Comprehensive error handling and timeout management
+- **No External Dependencies**: Custom clients use only built-in Node.js/Python libraries
+
+### Changing API Endpoint
+
+To use a different OpenAI-compatible endpoint, modify the `baseURL` parameter in the custom clients:
+
+**Python (custom_openai_client.py):**
+
+```python
+client = CustomOpenAIClient(
+    api_key="your_key",
+    base_url="https://your-custom-endpoint.com"
+)
+```
+
+**Node.js (custom_openai_client.js):**
+
+```javascript
+const client = new OpenAI({
+  apiKey: "your_key",
+  baseURL: "https://your-custom-endpoint.com",
+});
+```
 
 ## Usage
 
@@ -128,9 +169,18 @@ The agent automatically:
 
 1. Takes a screenshot of the current page
 2. Highlights interactive elements
-3. Sends the image to GPT-4V with context
+3. Sends the image to GPT-4V via custom API client
 4. Receives AI analysis and action recommendations
 5. Executes the recommended actions automatically
+
+### Custom API Integration
+
+The custom API clients provide:
+
+- **Seamless Integration**: Drop-in replacement for OpenAI SDK
+- **Custom Endpoint**: Pre-configured for api.omnia.reainternal.net
+- **Error Handling**: Robust error handling and retry logic
+- **Performance**: Optimized for reliability and speed
 
 ## Example Workflows
 
@@ -194,7 +244,7 @@ await this.page.setViewport({
 
 ### Common Issues
 
-1. **"OpenAI API key not found"**
+1. **"API key not found"**
 
    - Make sure your `.env` file contains a valid `OPENAI_API_KEY`
 
@@ -208,8 +258,14 @@ await this.page.setViewport({
    - Run `npm install` to install Node.js dependencies
    - Run `pip install -r requirements.txt` for Python dependencies
 
-4. **Timeout errors**
-   - Increase timeout values for slow websites
+4. **"API request failed"**
+
+   - Check your API key is valid for api.omnia.reainternal.net
+   - Verify network connectivity to the custom endpoint
+   - Check if your API key has the required permissions
+
+5. **Timeout errors**
+   - Increase timeout values for slow websites or API responses
    - Check your internet connection
 
 ### Performance Tips
@@ -217,16 +273,34 @@ await this.page.setViewport({
 - Use headless mode for better performance
 - Reduce screenshot quality for faster processing
 - Limit conversation history to prevent memory issues
+- Custom API clients include automatic retry logic
 
 ## Security Notes
 
 - Never commit your `.env` file with real API keys
 - Be cautious when running on untrusted websites
 - The agent has full browser access - use responsibly
+- Custom API endpoint is pre-configured - verify it matches your requirements
+
+## Custom API Client Details
+
+### Python Client Features
+
+- Full OpenAI SDK compatibility
+- Automatic request/response handling
+- Built-in error handling and retries
+- Uses only `requests` library (no external AI SDK dependencies)
+
+### Node.js Client Features
+
+- Drop-in replacement for OpenAI SDK
+- Native Node.js HTTP/HTTPS support
+- Promise-based async/await interface
+- No external dependencies beyond built-in Node.js modules
 
 ## Contributing
 
-Feel free to submit issues and enhancement requests!
+Feel free to submit issues and enhancement requests! The custom API clients are designed to be easily extensible for additional OpenAI-compatible endpoints.
 
 ## License
 

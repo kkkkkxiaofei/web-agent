@@ -3,7 +3,7 @@ import base64
 import subprocess
 import json
 from dotenv import load_dotenv
-from openai import OpenAI
+from custom_openai_client import CustomOpenAIClient
 
 # Load environment variables
 load_dotenv()
@@ -11,8 +11,8 @@ load_dotenv()
 
 class VisionScraper:
     def __init__(self):
-        """Initialize the VisionScraper with OpenAI client"""
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        """Initialize the VisionScraper with custom OpenAI client"""
+        self.client = CustomOpenAIClient(api_key=os.getenv("OPENAI_API_KEY"))
         if not os.getenv("OPENAI_API_KEY"):
             raise ValueError("OPENAI_API_KEY not found in environment variables")
 
@@ -55,9 +55,7 @@ class VisionScraper:
         except Exception as e:
             raise Exception(f"Error taking screenshot: {str(e)}")
 
-    def analyze_screenshot(
-        self, image_path, prompt, model="gpt-4-vision-preview", max_tokens=1000
-    ):
+    def analyze_screenshot(self, image_path, prompt, model="gpt-4o", max_tokens=1000):
         """Analyze screenshot using GPT-4V"""
         try:
             # Encode the image
