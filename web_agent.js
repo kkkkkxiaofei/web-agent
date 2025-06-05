@@ -30,17 +30,30 @@ Always explain what you see and what action you're taking.`;
     console.log("Initializing web agent...");
 
     this.browser = await puppeteer.launch({
-      headless: false, // Set to true for headless mode
+      headless: false,
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
+        "--single-process",
         "--disable-web-security",
-        "--disable-features=VizDisplayCompositor",
+        "--ignore-certificate-errors",
+        "--disable-features=IsolateOrigins",
+        "--disable-site-isolation-trials",
+        "--allow-running-insecure-content",
+        "--start-maximized",
       ],
+      // Increase timeout for browser launch
+      timeout: 60000,
     });
 
-    this.page = await this.browser.newPage();
+    const pages = await this.browser.pages();
+    this.page = pages[0]; // Use the first (default) page
+
+    // Ensure the page is properly initialized
+    if (!this.page) {
+      this.page = await this.browser.newPage();
+    }
+
     await this.page.setViewport({
       width: 1280,
       height: 800,
@@ -214,7 +227,7 @@ Always explain what you see and what action you're taking.`;
         if (element) {
           await element.click();
           console.log(`Clicked element ${elementId}`);
-          await this.page.waitForTimeout(2000); // Wait for page changes
+          await this.waitFor(2000); // Wait for page changes
           return true;
         } else {
           console.log(`Element ${elementId} not found`);
@@ -229,7 +242,8 @@ Always explain what you see and what action you're taking.`;
 
         if (element) {
           await element.click(); // Focus the element
-          await element.clear(); // Clear existing text
+          // Clear existing text by setting value to empty string
+          await element.evaluate((el) => (el.value = ""));
           await element.type(text);
           console.log(`Typed "${text}" into element ${elementId}`);
           return true;
@@ -241,7 +255,7 @@ Always explain what you see and what action you're taking.`;
         const url = action.replace("FETCH:", "").trim();
         await this.page.goto(url, { waitUntil: "networkidle2" });
         console.log(`Navigated to: ${url}`);
-        await this.page.waitForTimeout(2000);
+        await this.waitFor(2000);
         return true;
       } else if (action.startsWith("SCROLL:")) {
         const direction = action.replace("SCROLL:", "").trim().toLowerCase();
@@ -252,7 +266,7 @@ Always explain what you see and what action you're taking.`;
         }, scrollAmount);
 
         console.log(`Scrolled ${direction}`);
-        await this.page.waitForTimeout(1000);
+        await this.waitFor(1000);
         return true;
       } else if (action === "ANALYZE" || action === "COMPLETE") {
         return true; // No action needed
@@ -360,7 +374,7 @@ Always explain what you see and what action you're taking.`;
           console.log("Goodbye!");
           await this.cleanup();
           rl.close();
-          return;
+          process.exit(0);
         }
 
         try {
@@ -368,7 +382,7 @@ Always explain what you see and what action you're taking.`;
           if (input.startsWith("http://") || input.startsWith("https://")) {
             await this.page.goto(input, { waitUntil: "networkidle2" });
             console.log(`Navigated to: ${input}`);
-            await this.page.waitForTimeout(2000);
+            await this.waitFor(2000);
           }
 
           // Highlight interactive elements
@@ -395,7 +409,7 @@ Always explain what you see and what action you're taking.`;
             if (success) {
               console.log("Action completed successfully");
               // Take new screenshot after action
-              await this.page.waitForTimeout(2000);
+              await this.waitFor(2000);
               await this.highlightLinks();
               await this.takeScreenshot();
             } else {
@@ -417,6 +431,23 @@ Always explain what you see and what action you're taking.`;
     if (this.browser) {
       await this.browser.close();
       console.log("Browser closed");
+    }
+  }
+
+  // Helper method for waiting that works across Puppeteer versions
+  async waitFor(ms) {
+    try {
+      if (this.page.waitForTimeout) {
+        await this.page.waitForTimeout(ms);
+      } else if (this.page.waitFor) {
+        await this.page.waitFor(ms);
+      } else {
+        // Fallback to promise-based timeout
+        await new Promise((resolve) => setTimeout(resolve, ms));
+      }
+    } catch (error) {
+      console.log(`Wait method failed, using fallback: ${error.message}`);
+      await new Promise((resolve) => setTimeout(resolve, ms));
     }
   }
 }

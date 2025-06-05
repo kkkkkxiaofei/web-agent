@@ -19,8 +19,8 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "puppeteer": "^21.5.0",
-    "dotenv": "^16.3.1"
+    "dotenv": "^16.3.1",
+    "puppeteer": "^23.11.1"
   },
   "engines": {
     "node": ">=16.0.0"
