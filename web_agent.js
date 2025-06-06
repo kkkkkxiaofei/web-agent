@@ -2,6 +2,7 @@ const puppeteer = require("puppeteer");
 const fs = require("fs");
 const readline = require("readline");
 const { OpenAI } = require("./custom_openai_client");
+const Logger = require("./logger");
 require("dotenv").config();
 
 class WebAgent {
@@ -12,22 +13,53 @@ class WebAgent {
       apiKey: process.env.OPENAI_API_KEY,
     });
     this.conversationHistory = [];
-    this.systemMessage = `You are an AI web browsing agent. You can see screenshots of web pages and interact with them.
-        
-Available actions:
+    this.currentTask = null;
+    this.taskSteps = [];
+    this.currentStepIndex = 0;
+    this.taskCompleted = false;
+
+    // Initialize logger
+    this.logger = new Logger({
+      logFile: "web_agent.log",
+      showInTerminal: true,
+    });
+
+    this.systemMessage = `You are an AI web browsing agent capable of planning and executing complex multi-step tasks autonomously.
+
+CAPABILITIES:
 1. CLICK:[element_id] - Click on an element with the specified gbt_link_text attribute
-2. TYPE:[element_id]:[text] - Type text into an input field
+2. TYPE:[element_id]:[text] - Type text into an input field  
 3. FETCH:[url] - Navigate to a new URL
 4. SCROLL:[direction] - Scroll up or down (direction: up/down)
-5. ANALYZE - Just analyze the current page without taking action
-6. COMPLETE - Task is finished
+5. ANALYZE - Analyze the current page without taking action
+6. COMPLETE - Mark the current task as finished
+7. PLAN:[task_description] - Create a step-by-step plan for a complex task
 
-When you see highlighted elements on the page, they have yellow borders and numbers. Use these numbers as element_ids for clicking or typing.
-Always explain what you see and what action you're taking.`;
+TASK EXECUTION MODES:
+- SINGLE MODE: Execute one action based on user request
+- AUTONOMOUS MODE: When given a complex task, create a plan and execute steps automatically
+
+INSTRUCTIONS:
+- When you see highlighted elements, they have yellow borders and numbers. Use these numbers as element_ids.
+- For complex tasks (multiple steps), use PLAN: to break them down, then execute each step.
+- Always explain what you see and what action you're taking.
+- After each action, assess if you've completed the current step and what to do next.
+- Use COMPLETE when the overall task is finished.
+
+PLANNING FORMAT:
+When creating a plan, use this format:
+PLAN: [Brief task description]
+STEPS:
+1. [First step]
+2. [Second step] 
+3. [Third step]
+...
+
+Then execute each step automatically.`;
   }
 
   async initialize() {
-    console.log("Initializing web agent...");
+    this.logger.info("Initializing web agent...");
 
     this.browser = await puppeteer.launch({
       headless: false,
@@ -60,7 +92,7 @@ Always explain what you see and what action you're taking.`;
       deviceScaleFactor: 1,
     });
 
-    console.log("Web agent initialized successfully");
+    this.logger.success("Web agent initialized successfully");
   }
 
   encodeImageToBase64(imagePath) {
@@ -79,7 +111,7 @@ Always explain what you see and what action you're taking.`;
         fullPage: false,
         quality: 90,
       });
-      console.log(` Screenshot saved as ${filename}`);
+      this.logger.debug(`Screenshot saved as ${filename}`);
       return filename;
     } catch (error) {
       throw new Error(`Failed to take screenshot: ${error.message}`);
@@ -87,7 +119,7 @@ Always explain what you see and what action you're taking.`;
   }
 
   async highlightLinks() {
-    console.log("Highlighting interactive elements...");
+    this.logger.debug("Highlighting interactive elements...");
 
     // Remove any existing highlights and get interactive elements
     const elements = await this.page.evaluate(() => {
@@ -217,7 +249,7 @@ Always explain what you see and what action you're taking.`;
   }
 
   async performAction(action, page) {
-    console.log(`Performing action: ${action}`);
+    this.logger.info(`Performing action: ${action}`);
 
     try {
       if (action.startsWith("CLICK:")) {
@@ -226,11 +258,11 @@ Always explain what you see and what action you're taking.`;
 
         if (element) {
           await element.click();
-          console.log(`Clicked element ${elementId}`);
+          this.logger.success(`Clicked element ${elementId}`);
           await this.waitFor(2000); // Wait for page changes
           return true;
         } else {
-          console.log(`Element ${elementId} not found`);
+          this.logger.warning(`Element ${elementId} not found`);
           return false;
         }
       } else if (action.startsWith("TYPE:")) {
@@ -245,16 +277,16 @@ Always explain what you see and what action you're taking.`;
           // Clear existing text by setting value to empty string
           await element.evaluate((el) => (el.value = ""));
           await element.type(text);
-          console.log(`Typed "${text}" into element ${elementId}`);
+          this.logger.success(`Typed "${text}" into element ${elementId}`);
           return true;
         } else {
-          console.log(`Input element ${elementId} not found`);
+          this.logger.warning(`Input element ${elementId} not found`);
           return false;
         }
       } else if (action.startsWith("FETCH:")) {
         const url = action.replace("FETCH:", "").trim();
         await this.page.goto(url, { waitUntil: "networkidle2" });
-        console.log(`Navigated to: ${url}`);
+        this.logger.success(`Navigated to: ${url}`);
         await this.waitFor(2000);
         return true;
       } else if (action.startsWith("SCROLL:")) {
@@ -265,7 +297,7 @@ Always explain what you see and what action you're taking.`;
           window.scrollBy(0, amount);
         }, scrollAmount);
 
-        console.log(`Scrolled ${direction}`);
+        this.logger.success(`Scrolled ${direction}`);
         await this.waitFor(1000);
         return true;
       } else if (action === "ANALYZE" || action === "COMPLETE") {
@@ -274,7 +306,7 @@ Always explain what you see and what action you're taking.`;
 
       return false;
     } catch (error) {
-      console.error(`Error performing action: ${error.message}`);
+      this.logger.error(`Error performing action: ${error.message}`);
       return false;
     }
   }
@@ -361,63 +393,126 @@ Always explain what you see and what action you're taking.`;
       output: process.stdout,
     });
 
-    console.log("\n=== AI Web Agent Started ===");
-    console.log("Available commands:");
-    console.log("- Enter a URL to navigate");
-    console.log("- Ask questions about the current page");
-    console.log('- Type "quit" to exit');
-    console.log("================================\n");
+    this.logger.separator("AI Web Agent Started");
+    this.logger.info("🤖 Enhanced with Autonomous Task Execution!");
+    this.logger.info("CAPABILITIES:");
+    this.logger.info(
+      "📍 Simple commands: 'click pricing', 'scroll down', 'type hello'"
+    );
+    this.logger.info(
+      "🧠 Complex tasks: Multi-step instructions executed automatically"
+    );
+    this.logger.info("EXAMPLE COMPLEX TASKS:");
+    this.logger.info(
+      "• 'Go to https://npmjs.com and find the Pricing page, then tell me the pricing for each category'"
+    );
+    this.logger.info(
+      "• 'Search for react tutorial and then click on the first result'"
+    );
+    this.logger.info(
+      "• 'Navigate to the contact page and fill out the contact form'"
+    );
+    this.logger.info(
+      "• 'Find the documentation section and then locate the API reference'"
+    );
+    this.logger.info("COMMANDS:");
+    this.logger.info("- Enter a URL to navigate");
+    this.logger.info("- Give simple or complex instructions");
+    this.logger.info('- Type "quit" to exit');
+    this.logger.separator();
 
     const askQuestion = () => {
       rl.question("You: ", async (input) => {
         if (input.toLowerCase() === "quit") {
-          console.log("Goodbye!");
+          this.logger.info("Goodbye!");
           await this.cleanup();
           rl.close();
           process.exit(0);
         }
 
         try {
+          // Log user input
+          this.logger.user(input);
+
           // Check if input is a URL
           if (input.startsWith("http://") || input.startsWith("https://")) {
             await this.page.goto(input, { waitUntil: "networkidle2" });
-            console.log(`Navigated to: ${input}`);
+            this.logger.success(`Navigated to: ${input}`);
             await this.waitFor(2000);
           }
 
           // Highlight interactive elements
           const elements = await this.highlightLinks();
+          this.logger.debug(
+            `Highlighted ${elements.length} interactive elements`
+          );
 
           // Take screenshot
           const screenshotPath = await this.takeScreenshot();
 
-          // Analyze with GPT-4V
-          console.log("AI is analyzing the page...");
-          const aiResponse = await this.analyzeWithGPT4V(screenshotPath, input);
+          // Detect if this is a complex task vs simple command
+          const isComplexTask = this.isComplexTask(input);
 
-          console.log(`\nAI Agent: ${aiResponse}\n`);
+          let aiResponse;
+          if (isComplexTask) {
+            // Handle complex multi-step task
+            this.logger.task(
+              "Detected complex task - creating execution plan..."
+            );
 
-          // Check if AI wants to perform an action
-          const actionMatch = aiResponse.match(
-            /(CLICK|TYPE|FETCH|SCROLL):[^\n]*/
-          );
-          if (actionMatch) {
-            const action = actionMatch[0];
-            console.log(`Executing action: ${action}`);
+            const planningPrompt = `Complex task request: "${input}"
 
-            const success = await this.performAction(action, this.page);
-            if (success) {
-              console.log("Action completed successfully");
-              // Take new screenshot after action
-              await this.waitFor(2000);
-              await this.highlightLinks();
-              await this.takeScreenshot();
+This appears to be a multi-step task. Please create a detailed plan to accomplish this task autonomously. Use the PLAN format:
+
+PLAN: [Brief description]
+STEPS:
+1. [First step]
+2. [Second step]
+3. [Third step]
+...
+
+Then I will execute each step automatically.`;
+
+            aiResponse = await this.analyzeWithGPT4V(
+              screenshotPath,
+              planningPrompt
+            );
+            this.logger.ai(`AI Response: ${aiResponse}`);
+
+            // Parse the plan
+            const parsedPlan = this.parsePlan(aiResponse);
+            if (parsedPlan) {
+              this.currentTask = parsedPlan.task;
+              this.taskSteps = parsedPlan.steps;
+              this.currentStepIndex = 0;
+              this.taskCompleted = false;
+
+              this.logger.task(`Plan created for: ${this.currentTask}`);
+              this.logger.info(`Steps identified: ${this.taskSteps.length}`);
+              this.taskSteps.forEach((step, index) => {
+                this.logger.info(`   ${index + 1}. ${step}`);
+              });
+
+              // Start autonomous execution
+              await this.executeTaskAutonomously();
             } else {
-              console.log("Action failed");
+              this.logger.error(
+                "Could not parse the plan. Falling back to single action mode."
+              );
+              // Fall back to single action mode
+              aiResponse = await this.analyzeWithGPT4V(screenshotPath, input);
+              this.logger.ai(`AI Response: ${aiResponse}`);
+              await this.handleSingleAction(aiResponse);
             }
+          } else {
+            // Handle simple single action
+            this.logger.info("Handling as single action...");
+            aiResponse = await this.analyzeWithGPT4V(screenshotPath, input);
+            this.logger.ai(`AI Response: ${aiResponse}`);
+            await this.handleSingleAction(aiResponse);
           }
         } catch (error) {
-          console.error(`Error: ${error.message}`);
+          this.logger.error(`Error: ${error.message}`);
         }
 
         askQuestion(); // Continue the conversation
@@ -427,10 +522,49 @@ Always explain what you see and what action you're taking.`;
     askQuestion();
   }
 
+  // Detect if user input represents a complex multi-step task
+  isComplexTask(input) {
+    const complexIndicators = [
+      /then|after|next|finally|and then/i,
+      /go to .+ and .+/i,
+      /find .+ and .+/i,
+      /search .+ and .+/i,
+      /click .+ then .+/i,
+      /navigate .+ and .+/i,
+      /complete .+ task/i,
+      /step by step/i,
+      /multiple steps/i,
+    ];
+
+    return complexIndicators.some((pattern) => pattern.test(input));
+  }
+
+  // Handle single actions (backward compatibility)
+  async handleSingleAction(aiResponse) {
+    const actionMatch = aiResponse.match(
+      /(CLICK|TYPE|FETCH|SCROLL|COMPLETE):[^\n]*/
+    );
+    if (actionMatch) {
+      const action = actionMatch[0];
+      this.logger.info(`Executing action: ${action}`);
+
+      const success = await this.performAction(action, this.page);
+      if (success) {
+        this.logger.success("Action completed successfully");
+        // Take new screenshot after action
+        await this.waitFor(2000);
+        await this.highlightLinks();
+        await this.takeScreenshot();
+      } else {
+        this.logger.error("Action failed");
+      }
+    }
+  }
+
   async cleanup() {
     if (this.browser) {
       await this.browser.close();
-      console.log("Browser closed");
+      this.logger.info("Browser closed");
     }
   }
 
@@ -446,9 +580,150 @@ Always explain what you see and what action you're taking.`;
         await new Promise((resolve) => setTimeout(resolve, ms));
       }
     } catch (error) {
-      console.log(`Wait method failed, using fallback: ${error.message}`);
+      this.logger.debug(`Wait method failed, using fallback: ${error.message}`);
       await new Promise((resolve) => setTimeout(resolve, ms));
     }
+  }
+
+  // Extract and parse task plan from AI response
+  parsePlan(aiResponse) {
+    const planMatch = aiResponse.match(/PLAN:\s*(.+?)(?:\n|$)/i);
+    const stepsMatch = aiResponse.match(/STEPS:\s*([\s\S]*?)(?:\n\n|$)/i);
+
+    if (planMatch && stepsMatch) {
+      const taskDescription = planMatch[1].trim();
+      const stepsText = stepsMatch[1];
+      const steps = stepsText
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => /^\d+\./.test(line))
+        .map((line) => line.replace(/^\d+\.\s*/, ""));
+
+      return {
+        task: taskDescription,
+        steps: steps,
+      };
+    }
+    return null;
+  }
+
+  // Execute a single step in the current task
+  async executeTaskStep() {
+    if (!this.currentTask || this.currentStepIndex >= this.taskSteps.length) {
+      return false;
+    }
+
+    const currentStep = this.taskSteps[this.currentStepIndex];
+    this.logger.step(
+      `Executing Step ${this.currentStepIndex + 1}/${
+        this.taskSteps.length
+      }: ${currentStep}`
+    );
+
+    // Take screenshot and analyze for this step
+    await this.highlightLinks();
+    const screenshotPath = await this.takeScreenshot();
+
+    // Ask AI to execute this specific step
+    const stepPrompt = `Current task: ${this.currentTask}
+Current step (${this.currentStepIndex + 1}/${
+      this.taskSteps.length
+    }): ${currentStep}
+
+Please analyze the current page and take the appropriate action to complete this step. If this step is completed, you can move to the next step or use COMPLETE if all steps are done.`;
+
+    this.logger.ai("Analyzing the page for the current step...");
+    const aiResponse = await this.analyzeWithGPT4V(screenshotPath, stepPrompt);
+    this.logger.ai(`AI Response: ${aiResponse}`);
+
+    // Check for actions
+    const actionMatch = aiResponse.match(
+      /(CLICK|TYPE|FETCH|SCROLL|COMPLETE):[^\n]*/
+    );
+    if (actionMatch) {
+      const action = actionMatch[0];
+      this.logger.info(`Executing action: ${action}`);
+
+      if (action === "COMPLETE") {
+        this.taskCompleted = true;
+        this.logger.success("Task completed successfully!");
+        return false; // Stop execution
+      }
+
+      const success = await this.performAction(action, this.page);
+      if (success) {
+        this.logger.success("Step action completed successfully");
+        await this.waitFor(2000);
+
+        // Move to next step
+        this.currentStepIndex++;
+
+        // Check if we've completed all steps
+        if (this.currentStepIndex >= this.taskSteps.length) {
+          this.logger.success(
+            "All planned steps completed! Generating final analysis..."
+          );
+
+          // Take final screenshot and provide results
+          await this.highlightLinks();
+          const finalScreenshot = await this.takeScreenshot();
+          const finalPrompt = `Task completed: ${this.currentTask}
+
+All steps have been executed. Please provide a summary of what was accomplished and any final results or information gathered.`;
+
+          const finalResponse = await this.analyzeWithGPT4V(
+            finalScreenshot,
+            finalPrompt
+          );
+          this.logger.success(`FINAL RESULTS:\n${finalResponse}`);
+
+          this.taskCompleted = true;
+          return false; // Stop execution
+        }
+
+        return true; // Continue to next step
+      } else {
+        this.logger.error("Step action failed, retrying...");
+        return true; // Retry current step
+      }
+    } else {
+      // No action found, move to next step
+      this.currentStepIndex++;
+      return this.currentStepIndex < this.taskSteps.length;
+    }
+  }
+
+  // Start autonomous task execution
+  async executeTaskAutonomously() {
+    this.logger.task(
+      `Starting autonomous execution of task: ${this.currentTask}`
+    );
+    this.logger.info(`Steps to execute: ${this.taskSteps.length}`);
+
+    let continueExecution = true;
+    let maxSteps = 20; // Safety limit
+    let stepCount = 0;
+
+    while (continueExecution && !this.taskCompleted && stepCount < maxSteps) {
+      stepCount++;
+      continueExecution = await this.executeTaskStep();
+
+      if (continueExecution) {
+        await this.waitFor(1000); // Brief pause between steps
+      }
+    }
+
+    if (stepCount >= maxSteps) {
+      this.logger.warning(
+        "Reached maximum step limit. Task execution stopped."
+      );
+    }
+
+    // Reset task state
+    this.currentTask = null;
+    this.taskSteps = [];
+    this.currentStepIndex = 0;
+    this.taskCompleted = false;
   }
 }
 
@@ -460,7 +735,11 @@ async function main() {
     await agent.initialize();
     await agent.startInteractiveSession();
   } catch (error) {
-    console.error("Error starting web agent:", error.message);
+    if (agent.logger) {
+      agent.logger.error("Error starting web agent", error.message);
+    } else {
+      console.error("Error starting web agent:", error.message);
+    }
     await agent.cleanup();
     process.exit(1);
   }

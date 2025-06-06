@@ -1,0 +1,24 @@
+[2025-06-06 07:59:29.066] [TASK] Starting important task
+[2025-06-06 07:59:29.066] [STEP] Executing step 1
+[2025-06-06 07:59:29.066] [AI] AI is processing...
+[2025-06-06 07:59:29.066] [USER] User input received
+[2025-06-06 07:59:29.066] [DEBUG] Debug info
+[2025-06-06 07:59:29.067] [INFO] Detailed info
+[2025-06-06 07:59:29.067] [INFO] User logged in
+{
+  "userId": 123,
+  "timestamp": "2025-06-06T07:59:29.067Z",
+  "ip": "192.168.1.1"
+}
+[2025-06-06 07:59:29.067] [ERROR] API call failed
+{
+  "endpoint": "/api/users",
+  "statusCode": 500,
+  "errorMessage": "Internal server error"
+}
+[2025-06-06 07:59:29.067] [INFO] ============================================================ Starting New Session ============================================================
+[2025-06-06 07:59:29.067] [INFO] Session started
+[2025-06-06 07:59:29.067] [INFO] Processing data...
+[2025-06-06 07:59:29.067] [INFO] ============================================================ Session Complete ============================================================
+[2025-06-06 07:59:29.067] [INFO] This will only go to file now
+[2025-06-06 07:59:29.067] [SUCCESS] Terminal visibility restored
