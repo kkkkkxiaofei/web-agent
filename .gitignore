@@ -3,3 +3,5 @@ node_modules
 .venv
 puppeteer_data
 log.txt
+web_agent.log
+current_page.png

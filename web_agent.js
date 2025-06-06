@@ -473,6 +473,9 @@ STEPS:
 
 Then I will execute each step automatically.`;
 
+            this.logger.ai(
+              `Analyzing initial page with the following prompt: \n${planningPrompt}`
+            );
             aiResponse = await this.analyzeWithGPT4V(
               screenshotPath,
               planningPrompt
@@ -632,7 +635,11 @@ Current step (${this.currentStepIndex + 1}/${
 
 Please analyze the current page and take the appropriate action to complete this step. If this step is completed, you can move to the next step or use COMPLETE if all steps are done.`;
 
-    this.logger.ai("Analyzing the page for the current step...");
+    this.logger.ai(
+      `Step ${this.currentStepIndex + 1}/${
+        this.taskSteps.length
+      }, Analyzing the page for the current step with the following prompt: \n${stepPrompt}`
+    );
     const aiResponse = await this.analyzeWithGPT4V(screenshotPath, stepPrompt);
     this.logger.ai(`AI Response: ${aiResponse}`);
 
@@ -671,6 +678,9 @@ Please analyze the current page and take the appropriate action to complete this
 
 All steps have been executed. Please provide a summary of what was accomplished and any final results or information gathered.`;
 
+          this.logger.ai(
+            `Analyzing the page for the final step with the following prompt: \n${finalPrompt}`
+          );
           const finalResponse = await this.analyzeWithGPT4V(
             finalScreenshot,
             finalPrompt
@@ -687,9 +697,25 @@ All steps have been executed. Please provide a summary of what was accomplished 
         return true; // Retry current step
       }
     } else {
-      // No action found, move to next step
-      this.currentStepIndex++;
-      return this.currentStepIndex < this.taskSteps.length;
+      // No valid action found in AI response
+      this.logger.error(
+        `No valid action found in AI response for step ${
+          this.currentStepIndex + 1
+        }: ${aiResponse}`
+      );
+      this.logger.error("Task execution stopped due to invalid AI response");
+
+      // Reset task state and stop execution
+      this.currentTask = null;
+      this.taskSteps = [];
+      this.currentStepIndex = 0;
+      this.taskCompleted = false;
+
+      throw new Error(
+        `Invalid AI response - no actionable command found in step ${
+          this.currentStepIndex + 1
+        }`
+      );
     }
   }
 

@@ -30,16 +30,28 @@ class Logger {
     };
 
     this.severityConfig = {
-      DEBUG: { color: this.colors.dim + this.colors.cyan, prefix: "🔍" },
-      INFO: { color: this.colors.blue, prefix: "ℹ️ " },
-      SUCCESS: { color: this.colors.green, prefix: "✅" },
-      WARNING: { color: this.colors.yellow, prefix: "⚠️ " },
-      ERROR: { color: this.colors.red, prefix: "❌" },
-      CRITICAL: { color: this.colors.bgRed + this.colors.white, prefix: "🚨" },
-      TASK: { color: this.colors.magenta, prefix: "🎯" },
-      STEP: { color: this.colors.cyan, prefix: "🔄" },
-      AI: { color: this.colors.bright + this.colors.blue, prefix: "🤖" },
-      USER: { color: this.colors.bright + this.colors.green, prefix: "👤" },
+      DEBUG: { color: this.colors.bright + this.colors.cyan, prefix: "🔍" },
+      INFO: { color: this.colors.bright + this.colors.blue, prefix: "ℹ️ " },
+      SUCCESS: { color: this.colors.bright + this.colors.green, prefix: "✅" },
+      WARNING: {
+        color: this.colors.bright + this.colors.yellow,
+        prefix: "⚠️ ",
+      },
+      ERROR: { color: this.colors.bright + this.colors.red, prefix: "❌" },
+      CRITICAL: {
+        color: this.colors.bgRed + this.colors.bright + this.colors.white,
+        prefix: "🚨",
+      },
+      TASK: { color: this.colors.bright + this.colors.magenta, prefix: "🎯" },
+      STEP: { color: this.colors.bright + this.colors.cyan, prefix: "🔄" },
+      AI: {
+        color: this.colors.white,
+        prefix: "🤖",
+      },
+      USER: {
+        color: this.colors.bgGreen + this.colors.bright + this.colors.white,
+        prefix: "👤",
+      },
     };
 
     // Ensure log directory exists
