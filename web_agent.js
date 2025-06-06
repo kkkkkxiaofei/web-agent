@@ -20,7 +20,7 @@ class WebAgent {
 
     // Initialize logger
     this.logger = new Logger({
-      logFile: "web_agent.log",
+      logFile: "logs/web_agent.log",
       showInTerminal: true,
     });
 
@@ -31,7 +31,7 @@ CAPABILITIES:
 2. TYPE:[element_id]:[text] - Type text into an input field  
 3. FETCH:[url] - Navigate to a new URL
 4. SCROLL:[direction] - Scroll up or down (direction: up/down)
-5. ANALYZE - Analyze the current page without taking action
+5. ANALYZE - Take a screenshot of the current page and extract specific information from the page as per the user's request
 6. COMPLETE - Mark the current task as finished
 7. PLAN:[task_description] - Create a step-by-step plan for a complex task
 
@@ -633,7 +633,13 @@ Current step (${this.currentStepIndex + 1}/${
       this.taskSteps.length
     }): ${currentStep}
 
-Please analyze the current page and take the appropriate action to complete this step. If this step is completed, you can move to the next step or use COMPLETE if all steps are done.`;
+Please analyze this step to determine what action I should take and which element I should perform the action on as per the following DOM capabilities:
+- CLICK:[element_id]
+- TYPE:[element_id]:[text]
+- FETCH:[url]
+- SCROLL:[direction]
+
+Remember the output must be exactly one of the capabilities above if the DOM action is determined, return NULL if you cannot determine the action to take, directly output plain text if you are tasked to analyze the information on the page.`;
 
     this.logger.ai(
       `Step ${this.currentStepIndex + 1}/${
@@ -644,11 +650,18 @@ Please analyze the current page and take the appropriate action to complete this
     this.logger.ai(`AI Response: ${aiResponse}`);
 
     // Check for actions
-    const actionMatch = aiResponse.match(
+    const domActionMatch = aiResponse.match(
       /(CLICK|TYPE|FETCH|SCROLL|COMPLETE):[^\n]*/
     );
-    if (actionMatch) {
-      const action = actionMatch[0];
+    if (aiResponse === "NULL") {
+      this.logger.warning("No action required to take for this step!");
+      // Move to next step
+      this.currentStepIndex++;
+      return true;
+    }
+
+    if (domActionMatch) {
+      const action = domActionMatch[0];
       this.logger.info(`Executing action: ${action}`);
 
       if (action === "COMPLETE") {
@@ -697,25 +710,9 @@ All steps have been executed. Please provide a summary of what was accomplished 
         return true; // Retry current step
       }
     } else {
-      // No valid action found in AI response
-      this.logger.error(
-        `No valid action found in AI response for step ${
-          this.currentStepIndex + 1
-        }: ${aiResponse}`
-      );
-      this.logger.error("Task execution stopped due to invalid AI response");
-
-      // Reset task state and stop execution
-      this.currentTask = null;
-      this.taskSteps = [];
-      this.currentStepIndex = 0;
-      this.taskCompleted = false;
-
-      throw new Error(
-        `Invalid AI response - no actionable command found in step ${
-          this.currentStepIndex + 1
-        }`
-      );
+      this.logger.warning("No DOM action found in AI response for this step!");
+      this.currentStepIndex++;
+      return true;
     }
   }
 
