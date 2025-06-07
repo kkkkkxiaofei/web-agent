@@ -5,6 +5,12 @@ const { OpenAI } = require("./custom_openai_client");
 const Logger = require("./logger");
 require("dotenv").config();
 
+const PROCESS_ID = new Date().toISOString();
+
+if (!fs.existsSync(`logs/${PROCESS_ID}`)) {
+  fs.mkdirSync(`logs/${PROCESS_ID}`, { recursive: true });
+}
+
 class WebAgent {
   constructor() {
     this.browser = null;
@@ -20,7 +26,7 @@ class WebAgent {
 
     // Initialize logger
     this.logger = new Logger({
-      logFile: "logs/web_agent.log",
+      logFile: `logs/${PROCESS_ID}/web_agent.log`,
       showInTerminal: true,
     });
 
@@ -105,14 +111,16 @@ Then execute each step automatically.`;
   }
 
   async takeScreenshot(filename = "current_page.jpg") {
+    const uniqFilename = `${this.currentStepIndex}_${filename}`;
+    const filePath = `logs/${PROCESS_ID}/${uniqFilename}`;
     try {
       await this.page.screenshot({
-        path: filename,
+        path: filePath,
         fullPage: false,
         quality: 90,
       });
-      this.logger.debug(`Screenshot saved as ${filename}`);
-      return filename;
+      this.logger.debug(`Screenshot saved as ${filePath}`);
+      return filePath;
     } catch (error) {
       throw new Error(`Failed to take screenshot: ${error.message}`);
     }
