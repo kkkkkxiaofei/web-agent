@@ -110,8 +110,8 @@ Then execute each step automatically.`;
     }
   }
 
-  async takeScreenshot(filename = "current_page.jpg") {
-    const uniqFilename = `${this.currentStepIndex}_${filename}`;
+  async takeScreenshot(filename) {
+    const uniqFilename = filename ?? `${this.currentStepIndex}_current_page.jpg`;
     const filePath = `logs/${PROCESS_ID}/${uniqFilename}`;
     try {
       await this.page.screenshot({
@@ -221,11 +221,33 @@ Then execute each step automatically.`;
                     text-align: center;
                 `;
 
-        // Position the overlay relative to the element
-        if (el.style.position === "static" || !el.style.position) {
-          el.style.position = "relative";
+        // Position the overlay - handle input elements differently since they can't have children
+        if (
+          el.tagName.toLowerCase() === "input" ||
+          el.tagName.toLowerCase() === "textarea" ||
+          el.tagName.toLowerCase() === "select"
+        ) {
+          // For input elements, position overlay absolutely relative to document
+          const rect = el.getBoundingClientRect();
+          const scrollLeft =
+            window.pageXOffset || document.documentElement.scrollLeft;
+          const scrollTop =
+            window.pageYOffset || document.documentElement.scrollTop;
+
+          numberOverlay.style.position = "fixed";
+          numberOverlay.style.top = rect.top - 8 + "px";
+          numberOverlay.style.left = rect.left - 8 + "px";
+          numberOverlay.style.zIndex = "10000";
+
+          // Add to document body instead of element
+          document.body.appendChild(numberOverlay);
+        } else {
+          // For other elements, use relative positioning as before
+          if (el.style.position === "static" || !el.style.position) {
+            el.style.position = "relative";
+          }
+          el.appendChild(numberOverlay);
         }
-        el.appendChild(numberOverlay);
 
         // Get element info
         const rect = el.getBoundingClientRect();
@@ -456,7 +478,7 @@ Then execute each step automatically.`;
           );
 
           // Take screenshot
-          const screenshotPath = await this.takeScreenshot();
+          const screenshotPath = await this.takeScreenshot('init_page.jpg');
 
           // Detect if this is a complex task vs simple command
           const isComplexTask = this.isComplexTask(input);

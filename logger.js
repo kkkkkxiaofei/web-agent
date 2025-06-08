@@ -19,6 +19,7 @@ class Logger {
       magenta: "\x1b[35m",
       cyan: "\x1b[36m",
       white: "\x1b[37m",
+      pink: "\x1b[38;5;200m",
 
       // Background colors
       bgRed: "\x1b[41m",
@@ -34,7 +35,7 @@ class Logger {
       INFO: { color: this.colors.bright + this.colors.blue, prefix: "ℹ️ " },
       SUCCESS: { color: this.colors.bright + this.colors.green, prefix: "✅" },
       WARNING: {
-        color: this.colors.bright + this.colors.yellow,
+        color: this.colors.bright + this.colors.pink,
         prefix: "⚠️ ",
       },
       ERROR: { color: this.colors.bright + this.colors.red, prefix: "❌" },
@@ -45,7 +46,7 @@ class Logger {
       TASK: { color: this.colors.bright + this.colors.magenta, prefix: "🎯" },
       STEP: { color: this.colors.bright + this.colors.cyan, prefix: "🔄" },
       AI: {
-        color: this.colors.white,
+        color: this.colors.yellow,
         prefix: "🤖",
       },
       USER: {
