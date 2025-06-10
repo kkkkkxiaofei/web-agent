@@ -109,6 +109,12 @@ class Logger {
     }
   }
 
+  dumpFile(content, filename) {
+    const logDir = path.dirname(this.logFile);
+    const filePath = `${logDir}/${filename}`;
+    fs.writeFileSync(filePath, content, "utf8");
+  }
+
   log(level, message, data = null, options = {}) {
     const showInTerminal =
       options.showInTerminal !== undefined

@@ -111,7 +111,8 @@ Then execute each step automatically.`;
   }
 
   async takeScreenshot(filename) {
-    const uniqFilename = filename ?? `${this.currentStepIndex}_current_page.jpg`;
+    const uniqFilename =
+      filename ?? `${this.currentStepIndex}_current_page.jpg`;
     const filePath = `logs/${PROCESS_ID}/${uniqFilename}`;
     try {
       await this.page.screenshot({
@@ -478,7 +479,7 @@ Then execute each step automatically.`;
           );
 
           // Take screenshot
-          const screenshotPath = await this.takeScreenshot('init_page.jpg');
+          const screenshotPath = await this.takeScreenshot("init_page.jpg");
 
           // Detect if this is a complex task vs simple command
           const isComplexTask = this.isComplexTask(input);
@@ -557,19 +558,7 @@ Then I will execute each step automatically.`;
 
   // Detect if user input represents a complex multi-step task
   isComplexTask(input) {
-    const complexIndicators = [
-      /then|after|next|finally|and then/i,
-      /go to .+ and .+/i,
-      /find .+ and .+/i,
-      /search .+ and .+/i,
-      /click .+ then .+/i,
-      /navigate .+ and .+/i,
-      /complete .+ task/i,
-      /step by step/i,
-      /multiple steps/i,
-    ];
-
-    return complexIndicators.some((pattern) => pattern.test(input));
+    return true;
   }
 
   // Handle single actions (backward compatibility)
@@ -678,6 +667,32 @@ Remember the output must be exactly one of the capabilities above if the DOM act
     );
     const aiResponse = await this.analyzeWithGPT4V(screenshotPath, stepPrompt);
     this.logger.ai(`AI Response: ${aiResponse}`);
+
+    // Save both JSON and readable format
+    const conversationData = [
+      {
+        role: "system",
+        content: this.systemMessage,
+      },
+      ...this.conversationHistory,
+    ];
+
+    // Save JSON format (proper format)
+    this.logger.dumpFile(
+      JSON.stringify(conversationData, null, 2),
+      `prompt.json`
+    );
+
+    // Save human-readable format
+    const readableContent = conversationData
+      .map((msg, index) => {
+        return `=== Message ${index + 1} (${msg.role.toUpperCase()}) ===\n${
+          msg.content
+        }\n`;
+      })
+      .join("\n");
+
+    this.logger.dumpFile(readableContent, `prompt-readable.txt`);
 
     // Check for actions
     const domActionMatch = aiResponse.match(
