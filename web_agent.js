@@ -19,6 +19,7 @@ class WebAgent {
       apiKey: process.env.OPENAI_API_KEY,
     });
     this.conversationHistory = [];
+    this.fullConversationHistory = []; // Store complete history for logging
     this.currentTask = null;
     this.taskSteps = [];
     this.currentStepIndex = 0;
@@ -396,21 +397,35 @@ Then execute each step automatically.`;
       const aiResponse = response.choices[0].message.content;
 
       // Update conversation history
-      if (userPrompt) {
-        this.conversationHistory.push({
-          role: "user",
-          content: userPrompt + " [Image provided]",
-        });
-      }
-      this.conversationHistory.push({
+      const userMessage = userPrompt
+        ? {
+            role: "user",
+            content: userPrompt + `[Image provided]: ${imagePath}`,
+          }
+        : null;
+
+      const assistantMessage = {
         role: "assistant",
         content: aiResponse,
-      });
+      };
 
-      // Keep conversation history manageable
+      // Update both histories
+      if (userMessage) {
+        this.conversationHistory.push(userMessage);
+        this.fullConversationHistory.push(userMessage);
+      }
+      this.conversationHistory.push(assistantMessage);
+      this.fullConversationHistory.push(assistantMessage);
+
+      // Keep conversation history manageable for API calls (save tokens)
       if (this.conversationHistory.length > 20) {
         this.conversationHistory = this.conversationHistory.slice(-20);
       }
+
+      // Log full conversation count
+      this.logger.debug(
+        `Conversation history: ${this.conversationHistory.length} messages (API), ${this.fullConversationHistory.length} messages (full log)`
+      );
 
       return aiResponse;
     } catch (error) {
@@ -652,13 +667,34 @@ Current step (${this.currentStepIndex + 1}/${
       this.taskSteps.length
     }): ${currentStep}
 
-Please analyze this step to determine what action I should take and which element I should perform the action on as per the following DOM capabilities:
-- CLICK:[element_id]
-- TYPE:[element_id]:[text]
-- FETCH:[url]
-- SCROLL:[direction]
+CRITICAL: You MUST provide exactly ONE action command in the exact format specified below. Do not add brackets, quotes, or any additional text.
 
-Remember the output must be exactly one of the capabilities above if the DOM action is determined, return NULL if you cannot determine the action to take, directly output plain text if you are tasked to analyze the information on the page.`;
+REQUIRED ACTION FORMATS (copy these exact patterns):
+- CLICK:3 (for clicking element with ID 3)
+- TYPE:5:John Smith (for typing "John Smith" into element 5)
+- FETCH:https://example.com (for navigating to a URL - NO brackets around URL)
+- SCROLL:down (for scrolling down)
+- SCROLL:up (for scrolling up)
+
+STEP ANALYSIS REQUIREMENTS:
+1. If this step involves navigation/going to a URL → Use FETCH:URL_HERE (NO brackets!)
+2. If this step involves clicking something → Use CLICK:element_id 
+3. If this step involves typing text → Use TYPE:element_id:text_to_type
+4. If this step involves scrolling → Use SCROLL:direction
+
+EXAMPLES OF CORRECT FORMAT:
+✅ FETCH:https://docs.google.com/forms/example
+✅ CLICK:7
+✅ TYPE:2:Hello World
+✅ SCROLL:down
+
+EXAMPLES OF WRONG FORMAT:
+❌ FETCH:[https://example.com]
+❌ CLICK:[7]
+❌ "FETCH:https://example.com"
+❌ I will navigate to the URL
+
+You MUST respond with exactly one action command. If you cannot determine a specific action, respond with "BREAKDOWN_NEEDED".`;
 
     this.logger.ai(
       `Step ${this.currentStepIndex + 1}/${
@@ -668,23 +704,23 @@ Remember the output must be exactly one of the capabilities above if the DOM act
     const aiResponse = await this.analyzeWithGPT4V(screenshotPath, stepPrompt);
     this.logger.ai(`AI Response: ${aiResponse}`);
 
-    // Save both JSON and readable format
-    const conversationData = [
+    // Save both JSON and readable format using FULL conversation history for logging
+    const fullConversationData = [
       {
         role: "system",
         content: this.systemMessage,
       },
-      ...this.conversationHistory,
+      ...this.fullConversationHistory,
     ];
 
-    // Save JSON format (proper format)
+    // Save JSON format (complete conversation history)
     this.logger.dumpFile(
-      JSON.stringify(conversationData, null, 2),
-      `prompt.json`
+      JSON.stringify(fullConversationData, null, 2),
+      `full-conversation.json`
     );
 
-    // Save human-readable format
-    const readableContent = conversationData
+    // Save human-readable format (complete conversation history)
+    const readableContent = fullConversationData
       .map((msg, index) => {
         return `=== Message ${index + 1} (${msg.role.toUpperCase()}) ===\n${
           msg.content
@@ -692,12 +728,33 @@ Remember the output must be exactly one of the capabilities above if the DOM act
       })
       .join("\n");
 
-    this.logger.dumpFile(readableContent, `prompt-readable.txt`);
+    this.logger.dumpFile(readableContent, `full-conversation-readable.txt`);
 
-    // Check for actions
-    const domActionMatch = aiResponse.match(
-      /(CLICK|TYPE|FETCH|SCROLL|COMPLETE):[^\n]*/
+    // Also save current API prompt for debugging (truncated version)
+    const currentApiData = [
+      {
+        role: "system",
+        content: this.systemMessage,
+      },
+      ...this.conversationHistory,
+    ];
+
+    this.logger.dumpFile(
+      JSON.stringify(currentApiData, null, 2),
+      `current-api-prompt.json`
     );
+
+    // Check for actions - find ALL actions, not just the first one
+    const allActionMatches = [
+      ...aiResponse.matchAll(/(CLICK|TYPE|FETCH|SCROLL|COMPLETE):[^\n]*/g),
+    ];
+
+    // Check for explicit breakdown request
+    if (aiResponse.includes("BREAKDOWN_NEEDED")) {
+      this.logger.info("AI explicitly requested step breakdown");
+      return await this.handleStepBreakdown(currentStep, screenshotPath);
+    }
+
     if (aiResponse === "NULL") {
       this.logger.warning("No action required to take for this step!");
       // Move to next step
@@ -705,59 +762,97 @@ Remember the output must be exactly one of the capabilities above if the DOM act
       return true;
     }
 
-    if (domActionMatch) {
-      const action = domActionMatch[0];
-      this.logger.info(`Executing action: ${action}`);
+    if (allActionMatches.length > 0) {
+      const actions = allActionMatches.map((match) => match[0]);
+      this.logger.info(
+        `Found ${actions.length} action(s) to execute: ${actions.join(", ")}`
+      );
 
-      if (action === "COMPLETE") {
-        this.taskCompleted = true;
-        this.logger.success("Task completed successfully!");
-        return false; // Stop execution
-      }
+      // Execute all actions sequentially
+      let allActionsSuccessful = true;
+      for (let i = 0; i < actions.length; i++) {
+        const action = actions[i];
+        this.logger.info(
+          `Executing action ${i + 1}/${actions.length}: ${action}`
+        );
 
-      const success = await this.performAction(action, this.page);
-      if (success) {
-        this.logger.success("Step action completed successfully");
-        await this.waitFor(2000);
-
-        // Move to next step
-        this.currentStepIndex++;
-
-        // Check if we've completed all steps
-        if (this.currentStepIndex >= this.taskSteps.length) {
-          this.logger.success(
-            "All planned steps completed! Generating final analysis..."
-          );
-
-          // Take final screenshot and provide results
-          await this.highlightLinks();
-          const finalScreenshot = await this.takeScreenshot();
-          const finalPrompt = `Task completed: ${this.currentTask}
-
-All steps have been executed. Please provide a summary of what was accomplished and any final results or information gathered.`;
-
-          this.logger.ai(
-            `Analyzing the page for the final step with the following prompt: \n${finalPrompt}`
-          );
-          const finalResponse = await this.analyzeWithGPT4V(
-            finalScreenshot,
-            finalPrompt
-          );
-          this.logger.success(`FINAL RESULTS:\n${finalResponse}`);
-
+        if (action === "COMPLETE") {
           this.taskCompleted = true;
+          this.logger.success("Task completed successfully!");
           return false; // Stop execution
         }
 
-        return true; // Continue to next step
+        const success = await this.performAction(action, this.page);
+        if (success) {
+          this.logger.success(
+            `Action ${i + 1}/${actions.length} completed successfully`
+          );
+          // Add a small delay between actions
+          if (i < actions.length - 1) {
+            await this.waitFor(1000);
+          }
+        } else {
+          this.logger.error(
+            `Action ${i + 1}/${actions.length} failed: ${action}`
+          );
+          allActionsSuccessful = false;
+          break; // Stop executing remaining actions if one fails
+        }
+      }
+
+      if (allActionsSuccessful) {
+        this.logger.success(
+          `All ${actions.length} actions completed successfully`
+        );
+        await this.waitFor(2000);
+
+        // CRITICAL: Verify step completion before moving to next step
+        const stepCompleted = await this.verifyStepCompletion(currentStep);
+
+        if (stepCompleted) {
+          this.logger.success(`Step verification passed: ${currentStep}`);
+          this.currentStepIndex++;
+
+          // Check if we've completed all steps
+          if (this.currentStepIndex >= this.taskSteps.length) {
+            this.logger.success(
+              "All planned steps completed! Generating final analysis..."
+            );
+
+            // Take final screenshot and provide results
+            await this.highlightLinks();
+            const finalScreenshot = await this.takeScreenshot();
+            const finalPrompt = `Task completed: ${this.currentTask}
+
+All steps have been executed. Please provide a summary of what was accomplished and any final results or information gathered.`;
+
+            this.logger.ai(
+              `Analyzing the page for the final step with the following prompt: \n${finalPrompt}`
+            );
+            const finalResponse = await this.analyzeWithGPT4V(
+              finalScreenshot,
+              finalPrompt
+            );
+            this.logger.success(`FINAL RESULTS:\n${finalResponse}`);
+
+            this.taskCompleted = true;
+            return false; // Stop execution
+          }
+
+          return true; // Continue to next step
+        } else {
+          this.logger.warning(`Step verification failed: ${currentStep}`);
+          this.logger.info("Step needs further breakdown...");
+          return await this.handleStepBreakdown(currentStep, screenshotPath);
+        }
       } else {
-        this.logger.error("Step action failed, retrying...");
+        this.logger.error("Some actions failed, retrying step...");
         return true; // Retry current step
       }
     } else {
+      // No direct actions found - this might be a complex step that needs breakdown
       this.logger.warning("No DOM action found in AI response for this step!");
-      this.currentStepIndex++;
-      return true;
+      return await this.handleStepBreakdown(currentStep, screenshotPath);
     }
   }
 
@@ -792,6 +887,219 @@ All steps have been executed. Please provide a summary of what was accomplished 
     this.taskSteps = [];
     this.currentStepIndex = 0;
     this.taskCompleted = false;
+  }
+
+  // Verify step completion
+  async verifyStepCompletion(step) {
+    this.logger.info(`Verifying completion of step: ${step}`);
+
+    // Take a fresh screenshot to verify current state
+    await this.highlightLinks();
+    const verificationScreenshot = await this.takeScreenshot();
+
+    const verificationPrompt = `I need to verify if this step has been completed: "${step}"
+
+Please analyze the current page and determine if this specific step has been successfully completed.
+
+Respond with:
+- "COMPLETED" if the step has been fully accomplished
+- "INCOMPLETE" if the step has not been completed or only partially completed
+- "UNKNOWN" if you cannot determine the completion status
+
+Be very specific - only respond "COMPLETED" if you can clearly see evidence that the step was successfully accomplished.`;
+
+    this.logger.ai(
+      `Verifying step completion with prompt: \n${verificationPrompt}`
+    );
+    const verificationResponse = await this.analyzeWithGPT4V(
+      verificationScreenshot,
+      verificationPrompt
+    );
+    this.logger.ai(`Verification response: ${verificationResponse}`);
+
+    const isCompleted = verificationResponse.includes("COMPLETED");
+    this.logger.info(
+      `Step completion verification: ${isCompleted ? "PASSED" : "FAILED"}`
+    );
+
+    return isCompleted;
+  }
+
+  // Handle step breakdown
+  async handleStepBreakdown(currentStep, screenshotPath) {
+    this.logger.info(
+      "Step appears to be complex and needs further breakdown..."
+    );
+
+    // Ask AI to create a sub-plan for this specific step
+    const subPlanPrompt = `Current step that needs breakdown: "${currentStep}"
+
+This step appears to be complex and cannot be completed with a single action. Please break this step down into smaller, actionable sub-steps.
+
+Create a detailed sub-plan using this format:
+SUB-PLAN: [Brief description of what this step involves]
+SUB-STEPS:
+1. [First specific action]
+2. [Second specific action]
+3. [Third specific action]
+...
+
+Each sub-step should be specific enough to be completed with a single DOM action.`;
+
+    this.logger.ai(
+      `Creating sub-plan for complex step with prompt: \n${subPlanPrompt}`
+    );
+    const subPlanResponse = await this.analyzeWithGPT4V(
+      screenshotPath,
+      subPlanPrompt
+    );
+    this.logger.ai(`Sub-plan response: ${subPlanResponse}`);
+
+    // Parse the sub-plan
+    const parsedSubPlan = this.parseSubPlan(subPlanResponse);
+
+    if (parsedSubPlan && parsedSubPlan.steps.length > 0) {
+      this.logger.success(
+        `Created sub-plan with ${parsedSubPlan.steps.length} sub-steps:`
+      );
+      parsedSubPlan.steps.forEach((subStep, index) => {
+        this.logger.info(`   ${index + 1}. ${subStep}`);
+      });
+
+      // Execute sub-steps sequentially
+      const subTaskSuccess = await this.executeSubSteps(
+        parsedSubPlan.steps,
+        currentStep
+      );
+
+      if (subTaskSuccess) {
+        // Verify the overall step completion after sub-steps
+        const stepCompleted = await this.verifyStepCompletion(currentStep);
+        if (stepCompleted) {
+          this.logger.success(
+            `Complex step completed successfully: ${currentStep}`
+          );
+          this.currentStepIndex++;
+          return true;
+        } else {
+          this.logger.error(`Complex step verification failed: ${currentStep}`);
+          return true; // Retry the main step
+        }
+      } else {
+        this.logger.error(`Complex step failed: ${currentStep}`);
+        return true; // Retry the main step
+      }
+    } else {
+      this.logger.error(
+        "Could not create valid sub-plan. Moving to next step."
+      );
+      this.currentStepIndex++;
+      return true;
+    }
+  }
+
+  // Extract and parse sub-plan from AI response
+  parseSubPlan(aiResponse) {
+    const subPlanMatch = aiResponse.match(/SUB-PLAN:\s*(.+?)(?:\n|$)/i);
+    const subStepsMatch = aiResponse.match(
+      /SUB-STEPS:\s*([\s\S]*?)(?:\n\n|$)/i
+    );
+
+    if (subPlanMatch && subStepsMatch) {
+      const taskDescription = subPlanMatch[1].trim();
+      const stepsText = subStepsMatch[1];
+      const steps = stepsText
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => /^\d+\./.test(line))
+        .map((line) => line.replace(/^\d+\.\s*/, ""));
+
+      return {
+        task: taskDescription,
+        steps: steps,
+      };
+    }
+    return null;
+  }
+
+  // Execute sub-steps for a complex step
+  async executeSubSteps(subSteps, parentStep) {
+    this.logger.info(
+      `Executing ${subSteps.length} sub-steps for: ${parentStep}`
+    );
+
+    for (let i = 0; i < subSteps.length; i++) {
+      const subStep = subSteps[i];
+      this.logger.step(`Sub-step ${i + 1}/${subSteps.length}: ${subStep}`);
+
+      // Take screenshot and analyze for this sub-step
+      await this.highlightLinks();
+      const screenshotPath = await this.takeScreenshot();
+
+      // Ask AI to execute this specific sub-step
+      const subStepPrompt = `Current sub-step (${i + 1}/${
+        subSteps.length
+      }): ${subStep}
+Parent step: ${parentStep}
+
+CRITICAL: Provide exactly ONE action command in the exact format below. NO brackets, quotes, or extra text.
+
+REQUIRED ACTION FORMATS:
+- CLICK:3 (for clicking element 3)
+- TYPE:5:John Smith (for typing into element 5)
+- FETCH:https://example.com (for navigation - NO brackets!)
+- SCROLL:down (for scrolling)
+
+EXAMPLES:
+✅ FETCH:https://docs.google.com/forms/example
+✅ CLICK:7
+✅ TYPE:2:Hello World
+✅ SCROLL:down
+
+❌ FETCH:[https://example.com]
+❌ CLICK:[7]
+❌ "CLICK:7"
+
+Return only the action command, nothing else.`;
+
+      this.logger.ai(`Analyzing sub-step with prompt: \n${subStepPrompt}`);
+      const subStepResponse = await this.analyzeWithGPT4V(
+        screenshotPath,
+        subStepPrompt
+      );
+      this.logger.ai(`Sub-step response: ${subStepResponse}`);
+
+      // Parse and execute the sub-step action
+      const actionMatch = subStepResponse.match(
+        /(CLICK|TYPE|FETCH|SCROLL):[^\n]*/
+      );
+
+      if (actionMatch) {
+        const action = actionMatch[0];
+        this.logger.info(`Executing sub-step action: ${action}`);
+
+        const success = await this.performAction(action, this.page);
+        if (success) {
+          this.logger.success(
+            `Sub-step ${i + 1}/${subSteps.length} completed successfully`
+          );
+          await this.waitFor(1000); // Brief delay between sub-steps
+        } else {
+          this.logger.error(
+            `Sub-step ${i + 1}/${subSteps.length} failed: ${action}`
+          );
+          return false; // Sub-task failed
+        }
+      } else {
+        this.logger.warning(
+          `No action found for sub-step ${i + 1}/${
+            subSteps.length
+          }, skipping...`
+        );
+      }
+    }
+
+    return true; // All sub-steps completed successfully
   }
 }
 
