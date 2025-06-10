@@ -111,9 +111,25 @@ Then execute each step automatically.`;
     }
   }
 
-  async takeScreenshot(filename) {
-    const uniqFilename =
-      filename ?? `${this.currentStepIndex}_current_page.jpg`;
+  async takeScreenshot(
+    filename,
+    isSubTask = false,
+    subTaskIndex = null,
+    parentStepIndex = null
+  ) {
+    let uniqFilename;
+
+    if (filename) {
+      // Custom filename provided
+      uniqFilename = filename;
+    } else if (isSubTask && subTaskIndex !== null && parentStepIndex !== null) {
+      // Subtask screenshot: parentStep_sub_subIndex_current_page.jpg
+      uniqFilename = `${parentStepIndex}_sub_${subTaskIndex}_current_page.jpg`;
+    } else {
+      // Regular step screenshot
+      uniqFilename = `${this.currentStepIndex}_current_page.jpg`;
+    }
+
     const filePath = `logs/${PROCESS_ID}/${uniqFilename}`;
     try {
       await this.page.screenshot({
@@ -893,9 +909,11 @@ All steps have been executed. Please provide a summary of what was accomplished 
   async verifyStepCompletion(step) {
     this.logger.info(`Verifying completion of step: ${step}`);
 
-    // Take a fresh screenshot to verify current state
+    // Take a fresh screenshot to verify current state with specific filename
     await this.highlightLinks();
-    const verificationScreenshot = await this.takeScreenshot();
+    const verificationScreenshot = await this.takeScreenshot(
+      `${this.currentStepIndex}_verification.jpg`
+    );
 
     const verificationPrompt = `I need to verify if this step has been completed: "${step}"
 
@@ -1028,13 +1046,20 @@ Each sub-step should be specific enough to be completed with a single DOM action
       `Executing ${subSteps.length} sub-steps for: ${parentStep}`
     );
 
+    const parentStepIndex = this.currentStepIndex; // Store parent step index
+
     for (let i = 0; i < subSteps.length; i++) {
       const subStep = subSteps[i];
       this.logger.step(`Sub-step ${i + 1}/${subSteps.length}: ${subStep}`);
 
-      // Take screenshot and analyze for this sub-step
+      // Take screenshot and analyze for this sub-step with subtask context
       await this.highlightLinks();
-      const screenshotPath = await this.takeScreenshot();
+      const screenshotPath = await this.takeScreenshot(
+        null, // no custom filename
+        true, // isSubTask = true
+        i + 1, // subTaskIndex (1-based)
+        parentStepIndex // parentStepIndex
+      );
 
       // Ask AI to execute this specific sub-step
       const subStepPrompt = `Current sub-step (${i + 1}/${
