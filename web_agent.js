@@ -38,9 +38,14 @@ CAPABILITIES:
 2. TYPE:[element_id]:[text] - Type text into an input field  
 3. FETCH:[url] - Navigate to a new URL
 4. SCROLL:[direction] - Scroll up or down (direction: up/down)
-5. ANALYZE - Take a screenshot of the current page and extract specific information from the page as per the user's request
-6. COMPLETE - Mark the current task as finished
-7. PLAN:[task_description] - Create a step-by-step plan for a complex task
+5. SELECT:[element_id]:[option_text] - Select an option from a dropdown by visible text
+6. HOVER:[element_id] - Hover over an element to reveal menus or tooltips
+7. PRESS:[key] - Press keyboard keys (Enter, Escape, Tab, etc.) or key combinations (Ctrl+A, Ctrl+C)
+8. WAIT:[seconds] - Wait for a specified number of seconds for page changes
+9. CLEAR:[element_id] - Clear the content of an input field
+10. ANALYZE - Take a screenshot of the current page and extract specific information from the page as per the user's request
+11. COMPLETE - Mark the current task as finished
+12. PLAN:[task_description] - Create a step-by-step plan for a complex task
 
 TASK EXECUTION MODES:
 - SINGLE MODE: Execute one action based on user request
@@ -348,6 +353,180 @@ Then execute each step automatically.`;
         this.logger.success(`Scrolled ${direction}`);
         await this.waitFor(1000);
         return true;
+      } else if (action.startsWith("SELECT:")) {
+        const parts = action.replace("SELECT:", "").split(":");
+        const elementId = parts[0].trim();
+        const optionText = parts.slice(1).join(":").trim();
+
+        const element = await this.page.$(`[gbt_link_text="${elementId}"]`);
+
+        if (element) {
+          try {
+            // Try different selection methods
+            const tagName = await element.evaluate((el) =>
+              el.tagName.toLowerCase()
+            );
+
+            if (tagName === "select") {
+              // For <select> elements, try to select by visible text
+              const optionSelected = await element.evaluate(
+                (selectEl, text) => {
+                  const options = Array.from(selectEl.options);
+                  const targetOption = options.find(
+                    (option) =>
+                      option.text
+                        .trim()
+                        .toLowerCase()
+                        .includes(text.toLowerCase()) ||
+                      option.value.toLowerCase().includes(text.toLowerCase())
+                  );
+
+                  if (targetOption) {
+                    selectEl.value = targetOption.value;
+                    selectEl.dispatchEvent(
+                      new Event("change", { bubbles: true })
+                    );
+                    return true;
+                  }
+                  return false;
+                },
+                optionText
+              );
+
+              if (optionSelected) {
+                this.logger.success(
+                  `Selected "${optionText}" from dropdown ${elementId}`
+                );
+                await this.waitFor(1000);
+                return true;
+              } else {
+                this.logger.warning(
+                  `Option "${optionText}" not found in dropdown ${elementId}`
+                );
+                return false;
+              }
+            } else {
+              // For other elements (like custom dropdowns), try clicking
+              await element.click();
+              await this.waitFor(500);
+
+              // Look for the option to click
+              const optionClicked = await this.page.evaluate((text) => {
+                const elements = document.querySelectorAll("*");
+                for (const el of elements) {
+                  if (
+                    el.textContent &&
+                    el.textContent
+                      .trim()
+                      .toLowerCase()
+                      .includes(text.toLowerCase())
+                  ) {
+                    el.click();
+                    return true;
+                  }
+                }
+                return false;
+              }, optionText);
+
+              if (optionClicked) {
+                this.logger.success(
+                  `Selected "${optionText}" from dropdown ${elementId}`
+                );
+                await this.waitFor(1000);
+                return true;
+              } else {
+                this.logger.warning(
+                  `Could not select "${optionText}" from dropdown ${elementId}`
+                );
+                return false;
+              }
+            }
+          } catch (error) {
+            this.logger.warning(
+              `Error selecting from dropdown: ${error.message}`
+            );
+            return false;
+          }
+        } else {
+          this.logger.warning(`Dropdown element ${elementId} not found`);
+          return false;
+        }
+      } else if (action.startsWith("HOVER:")) {
+        const elementId = action.replace("HOVER:", "").trim();
+        const element = await this.page.$(`[gbt_link_text="${elementId}"]`);
+
+        if (element) {
+          await element.hover();
+          this.logger.success(`Hovered over element ${elementId}`);
+          await this.waitFor(1000); // Wait for hover effects
+          return true;
+        } else {
+          this.logger.warning(`Element ${elementId} not found for hover`);
+          return false;
+        }
+      } else if (action.startsWith("PRESS:")) {
+        const keySequence = action.replace("PRESS:", "").trim();
+
+        // Handle key combinations (e.g., Ctrl+A, Ctrl+C)
+        if (keySequence.includes("+")) {
+          const keys = keySequence.split("+");
+          const modifiers = keys.slice(0, -1);
+          const mainKey = keys[keys.length - 1];
+
+          // Build modifier object
+          const options = {};
+          if (modifiers.includes("Ctrl") || modifiers.includes("Control")) {
+            options.ctrlKey = true;
+          }
+          if (modifiers.includes("Shift")) {
+            options.shiftKey = true;
+          }
+          if (modifiers.includes("Alt")) {
+            options.altKey = true;
+          }
+          if (modifiers.includes("Meta") || modifiers.includes("Cmd")) {
+            options.metaKey = true;
+          }
+
+          await this.page.keyboard.press(mainKey, options);
+          this.logger.success(`Pressed key combination: ${keySequence}`);
+        } else {
+          // Single key press
+          await this.page.keyboard.press(keySequence);
+          this.logger.success(`Pressed key: ${keySequence}`);
+        }
+
+        await this.waitFor(500);
+        return true;
+      } else if (action.startsWith("WAIT:")) {
+        const seconds = parseFloat(action.replace("WAIT:", "").trim());
+
+        if (isNaN(seconds) || seconds <= 0) {
+          this.logger.warning(`Invalid wait time: ${seconds}`);
+          return false;
+        }
+
+        this.logger.info(`Waiting ${seconds} seconds...`);
+        await this.waitFor(seconds * 1000);
+        this.logger.success(`Waited ${seconds} seconds`);
+        return true;
+      } else if (action.startsWith("CLEAR:")) {
+        const elementId = action.replace("CLEAR:", "").trim();
+        const element = await this.page.$(`[gbt_link_text="${elementId}"]`);
+
+        if (element) {
+          await element.click(); // Focus the element
+          // Select all and delete
+          await this.page.keyboard.down("Control");
+          await this.page.keyboard.press("a");
+          await this.page.keyboard.up("Control");
+          await this.page.keyboard.press("Delete");
+          this.logger.success(`Cleared content from element ${elementId}`);
+          return true;
+        } else {
+          this.logger.warning(`Element ${elementId} not found for clearing`);
+          return false;
+        }
       } else if (action === "ANALYZE" || action === "COMPLETE") {
         return true; // No action needed
       }
@@ -595,7 +774,7 @@ Then I will execute each step automatically.`;
   // Handle single actions (backward compatibility)
   async handleSingleAction(aiResponse) {
     const actionMatch = aiResponse.match(
-      /(CLICK|TYPE|FETCH|SCROLL|COMPLETE):[^\n]*/
+      /(CLICK|TYPE|FETCH|SCROLL|SELECT|HOVER|PRESS|WAIT|CLEAR|COMPLETE):[^\n]*/
     );
     if (actionMatch) {
       const action = actionMatch[0];
@@ -685,29 +864,34 @@ Current step (${this.currentStepIndex + 1}/${
 
 CRITICAL: You MUST provide exactly ONE action command in the exact format specified below. Do not add brackets, quotes, or any additional text.
 
-REQUIRED ACTION FORMATS (copy these exact patterns):
-- CLICK:3 (for clicking element with ID 3)
-- TYPE:5:John Smith (for typing "John Smith" into element 5)
-- FETCH:https://example.com (for navigating to a URL - NO brackets around URL)
-- SCROLL:down (for scrolling down)
+REQUIRED ACTION FORMATS:
+- CLICK:3 (for clicking element 3)
+- TYPE:5:John Smith (for typing into element 5)
+- FETCH:https://example.com (for navigation - NO brackets!)
+- SCROLL:down (for scrolling)
 - SCROLL:up (for scrolling up)
+- SELECT:7:Option 1 (for selecting from dropdown)
+- HOVER:4 (for hovering over element)
+- PRESS:Enter (for pressing keys)
+- WAIT:3 (for waiting 3 seconds)
+- CLEAR:2 (for clearing element)
 
-STEP ANALYSIS REQUIREMENTS:
-1. If this step involves navigation/going to a URL → Use FETCH:URL_HERE (NO brackets!)
-2. If this step involves clicking something → Use CLICK:element_id 
-3. If this step involves typing text → Use TYPE:element_id:text_to_type
-4. If this step involves scrolling → Use SCROLL:direction
-
-EXAMPLES OF CORRECT FORMAT:
+EXAMPLES:
 ✅ FETCH:https://docs.google.com/forms/example
 ✅ CLICK:7
 ✅ TYPE:2:Hello World
 ✅ SCROLL:down
+✅ SELECT:5:United States
+✅ HOVER:3
+✅ PRESS:Enter
+✅ WAIT:2
+✅ CLEAR:4
 
 EXAMPLES OF WRONG FORMAT:
 ❌ FETCH:[https://example.com]
 ❌ CLICK:[7]
 ❌ "FETCH:https://example.com"
+❌ SELECT:5:[United States]
 ❌ I will navigate to the URL
 
 You MUST respond with exactly one action command. If you cannot determine a specific action, respond with "BREAKDOWN_NEEDED".`;
@@ -762,7 +946,9 @@ You MUST respond with exactly one action command. If you cannot determine a spec
 
     // Check for actions - find ALL actions, not just the first one
     const allActionMatches = [
-      ...aiResponse.matchAll(/(CLICK|TYPE|FETCH|SCROLL|COMPLETE):[^\n]*/g),
+      ...aiResponse.matchAll(
+        /(CLICK|TYPE|FETCH|SCROLL|SELECT|HOVER|PRESS|WAIT|CLEAR|COMPLETE):[^\n]*/g
+      ),
     ];
 
     // Check for explicit breakdown request
@@ -1074,12 +1260,22 @@ REQUIRED ACTION FORMATS:
 - TYPE:5:John Smith (for typing into element 5)
 - FETCH:https://example.com (for navigation - NO brackets!)
 - SCROLL:down (for scrolling)
+- SELECT:7:Option 1 (for selecting from dropdown)
+- HOVER:4 (for hovering over element)
+- PRESS:Enter (for pressing keys)
+- WAIT:3 (for waiting 3 seconds)
+- CLEAR:2 (for clearing element)
 
 EXAMPLES:
 ✅ FETCH:https://docs.google.com/forms/example
 ✅ CLICK:7
 ✅ TYPE:2:Hello World
 ✅ SCROLL:down
+✅ SELECT:5:United States
+✅ HOVER:3
+✅ PRESS:Enter
+✅ WAIT:2
+✅ CLEAR:4
 
 ❌ FETCH:[https://example.com]
 ❌ CLICK:[7]
@@ -1096,7 +1292,7 @@ Return only the action command, nothing else.`;
 
       // Parse and execute the sub-step action
       const actionMatch = subStepResponse.match(
-        /(CLICK|TYPE|FETCH|SCROLL):[^\n]*/
+        /(CLICK|TYPE|FETCH|SCROLL|SELECT|HOVER|PRESS|WAIT|CLEAR):[^\n]*/
       );
 
       if (actionMatch) {
