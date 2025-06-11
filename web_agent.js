@@ -802,24 +802,15 @@ class WebAgent {
     // Parse both single actions and comma-separated actions
     let actions = [];
 
-    // First, try to find individual actions (existing logic)
-    const actionMatch = aiResponse.match(
-      /(CLICK|TYPE|FETCH|SCROLL|SELECT|HOVER|PRESS|WAIT|CLEAR|COMPLETE):[^\n]*/
-    );
-    if (actionMatch) {
-      actions.push(actionMatch[0]);
-    }
+    // Parse actions line by line, checking for comma-separated format first
+    const lines = aiResponse
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line);
 
-    // Also check for comma-separated actions
-    const commaSeparatedPattern =
-      /(?:^|\n)\s*([A-Z]+:[^,\n]*(?:,[A-Z]+:[^,\n]*)*)\s*(?:\n|$)/g;
-    const commaSeparatedMatches = [
-      ...aiResponse.matchAll(commaSeparatedPattern),
-    ];
-
-    for (const match of commaSeparatedMatches) {
-      const line = match[1].trim();
-      if (line.includes(",")) {
+    for (const line of lines) {
+      // Check if this line contains comma-separated actions
+      if (line.includes(",") && /^[A-Z]+:/.test(line)) {
         // Split by comma and clean up each action
         const commaSeparatedActions = line
           .split(",")
@@ -832,6 +823,14 @@ class WebAgent {
         );
         if (validActions.length > 0) {
           actions.push(...validActions);
+        }
+      } else {
+        // Check for single action on this line
+        const singleActionMatch = line.match(
+          /^(CLICK|TYPE|FETCH|SCROLL|SELECT|HOVER|PRESS|WAIT|CLEAR|COMPLETE):[^\n\r]*/
+        );
+        if (singleActionMatch) {
+          actions.push(singleActionMatch[0]);
         }
       }
     }
@@ -1067,26 +1066,15 @@ class WebAgent {
     // Check for actions - find ALL actions, including multi-line responses and comma-separated actions
     let allActions = [];
 
-    // First, find all actions using the existing regex pattern (line-by-line)
-    const allActionMatches = [
-      ...aiResponse.matchAll(
-        /(CLICK|TYPE|FETCH|SCROLL|SELECT|HOVER|PRESS|WAIT|CLEAR|COMPLETE):[^\n\r]*/g
-      ),
-    ];
+    // Parse actions line by line, checking for comma-separated format first
+    const lines = aiResponse
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line);
 
-    // Add line-by-line actions
-    allActions.push(...allActionMatches.map((match) => match[0]));
-
-    // Also check for comma-separated actions on a single line
-    const commaSeparatedPattern =
-      /(?:^|\n)\s*([A-Z]+:[^,\n]*(?:,[A-Z]+:[^,\n]*)*)\s*(?:\n|$)/g;
-    const commaSeparatedMatches = [
-      ...aiResponse.matchAll(commaSeparatedPattern),
-    ];
-
-    for (const match of commaSeparatedMatches) {
-      const line = match[1].trim();
-      if (line.includes(",")) {
+    for (const line of lines) {
+      // Check if this line contains comma-separated actions
+      if (line.includes(",") && /^[A-Z]+:/.test(line)) {
         // Split by comma and clean up each action
         const commaSeparatedActions = line
           .split(",")
@@ -1099,6 +1087,14 @@ class WebAgent {
         );
         if (validActions.length > 0) {
           allActions.push(...validActions);
+        }
+      } else {
+        // Check for single action on this line
+        const singleActionMatch = line.match(
+          /^(CLICK|TYPE|FETCH|SCROLL|SELECT|HOVER|PRESS|WAIT|CLEAR|COMPLETE):[^\n\r]*/
+        );
+        if (singleActionMatch) {
+          allActions.push(singleActionMatch[0]);
         }
       }
     }
