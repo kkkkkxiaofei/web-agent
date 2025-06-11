@@ -1,7 +1,7 @@
 const puppeteer = require("puppeteer");
 const fs = require("fs");
 const readline = require("readline");
-const { OpenAI } = require("./custom_openai_client");
+const Anthropic = require("@anthropic-ai/sdk");
 const Logger = require("./logger");
 const Prompts = require("./prompts");
 require("dotenv").config();
@@ -16,8 +16,8 @@ class WebAgent {
   constructor() {
     this.browser = null;
     this.page = null;
-    this.openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
+    this.anthropic = new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY,
     });
     this.conversationHistory = [];
     this.fullConversationHistory = []; // Store complete history for logging
@@ -503,17 +503,21 @@ class WebAgent {
     }
   }
 
-  async analyzeWithGPT4V(imagePath, userPrompt = null) {
+  async analyzeWithClaude(imagePath, userPrompt = null) {
     try {
       const base64Image = this.encodeImageToBase64(imagePath);
 
-      const messages = [
-        {
-          role: "system",
-          content: this.systemMessage,
+      // Claude requires separate system parameter and different message format
+      const messages = [...this.conversationHistory];
+
+      const imageContent = {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/jpeg",
+          data: base64Image,
         },
-        ...this.conversationHistory,
-      ];
+      };
 
       if (userPrompt) {
         messages.push({
@@ -523,38 +527,25 @@ class WebAgent {
               type: "text",
               text: userPrompt,
             },
-            {
-              type: "image_url",
-              image_url: {
-                url: `data:image/jpeg;base64,${base64Image}`,
-                detail: "high",
-              },
-            },
+            imageContent,
           ],
         });
       } else {
         messages.push({
           role: "user",
-          content: [
-            {
-              type: "image_url",
-              image_url: {
-                url: `data:image/jpeg;base64,${base64Image}`,
-                detail: "high",
-              },
-            },
-          ],
+          content: [imageContent],
         });
       }
 
-      const response = await this.openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: messages,
+      const response = await this.anthropic.messages.create({
+        model: "claude-3-5-sonnet-20241022",
         max_tokens: 1000,
         temperature: 0.1,
+        system: this.systemMessage,
+        messages: messages,
       });
 
-      const aiResponse = response.choices[0].message.content;
+      const aiResponse = response.content[0].text;
 
       // Update conversation history
       const userMessage = userPrompt
@@ -589,7 +580,7 @@ class WebAgent {
 
       return aiResponse;
     } catch (error) {
-      throw new Error(`GPT-4V analysis failed: ${error.message}`);
+      throw new Error(`Claude analysis failed: ${error.message}`);
     }
   }
 
@@ -671,7 +662,7 @@ class WebAgent {
             this.logger.ai(
               `Analyzing initial page with the following prompt: \n${planningPrompt}`
             );
-            aiResponse = await this.analyzeWithGPT4V(
+            aiResponse = await this.analyzeWithClaude(
               screenshotPath,
               planningPrompt
             );
@@ -698,14 +689,14 @@ class WebAgent {
                 "Could not parse the plan. Falling back to single action mode."
               );
               // Fall back to single action mode
-              aiResponse = await this.analyzeWithGPT4V(screenshotPath, input);
+              aiResponse = await this.analyzeWithClaude(screenshotPath, input);
               this.logger.ai(`AI Response: ${aiResponse}`);
               await this.handleSingleAction(aiResponse);
             }
           } else {
             // Handle simple single action
             this.logger.info("Handling as single action...");
-            aiResponse = await this.analyzeWithGPT4V(screenshotPath, input);
+            aiResponse = await this.analyzeWithClaude(screenshotPath, input);
             this.logger.ai(`AI Response: ${aiResponse}`);
             await this.handleSingleAction(aiResponse);
           }
@@ -831,7 +822,7 @@ class WebAgent {
         this.taskSteps.length
       }, Analyzing the page for the current step with the following prompt: \n${stepPrompt}`
     );
-    const aiResponse = await this.analyzeWithGPT4V(screenshotPath, stepPrompt);
+    const aiResponse = await this.analyzeWithClaude(screenshotPath, stepPrompt);
     this.logger.ai(`AI Response: ${aiResponse}`);
 
     // Save both JSON and readable format using FULL conversation history for logging
@@ -912,7 +903,7 @@ class WebAgent {
         this.logger.ai(
           `Analyzing the page for the final step with the following prompt: \n${finalPrompt}`
         );
-        const finalResponse = await this.analyzeWithGPT4V(
+        const finalResponse = await this.analyzeWithClaude(
           finalScreenshot,
           finalPrompt
         );
@@ -1001,7 +992,7 @@ class WebAgent {
             this.logger.ai(
               `Analyzing the page for the final step with the following prompt: \n${finalPrompt}`
             );
-            const finalResponse = await this.analyzeWithGPT4V(
+            const finalResponse = await this.analyzeWithClaude(
               finalScreenshot,
               finalPrompt
             );
@@ -1076,7 +1067,7 @@ class WebAgent {
     this.logger.ai(
       `Verifying step completion with prompt: \n${verificationPrompt}`
     );
-    const verificationResponse = await this.analyzeWithGPT4V(
+    const verificationResponse = await this.analyzeWithClaude(
       verificationScreenshot,
       verificationPrompt
     );
@@ -1102,7 +1093,7 @@ class WebAgent {
     this.logger.ai(
       `Creating sub-plan for complex step with prompt: \n${subPlanPrompt}`
     );
-    const subPlanResponse = await this.analyzeWithGPT4V(
+    const subPlanResponse = await this.analyzeWithClaude(
       screenshotPath,
       subPlanPrompt
     );
@@ -1205,7 +1196,7 @@ class WebAgent {
       );
 
       this.logger.ai(`Analyzing sub-step with prompt: \n${subStepPrompt}`);
-      const subStepResponse = await this.analyzeWithGPT4V(
+      const subStepResponse = await this.analyzeWithClaude(
         screenshotPath,
         subStepPrompt
       );
