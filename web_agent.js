@@ -3,6 +3,7 @@ const fs = require("fs");
 const readline = require("readline");
 const { OpenAI } = require("./custom_openai_client");
 const Logger = require("./logger");
+const Prompts = require("./prompts");
 require("dotenv").config();
 
 const PROCESS_ID = new Date().toISOString();
@@ -31,43 +32,7 @@ class WebAgent {
       showInTerminal: true,
     });
 
-    this.systemMessage = `You are an AI web browsing agent capable of planning and executing complex multi-step tasks autonomously.
-
-CAPABILITIES:
-1. CLICK:[element_id] - Click on an element with the specified gbt_link_text attribute
-2. TYPE:[element_id]:[text] - Type text into an input field  
-3. FETCH:[url] - Navigate to a new URL
-4. SCROLL:[direction] - Scroll up or down (direction: up/down)
-5. SELECT:[element_id]:[option_text] - Select an option from a dropdown by visible text
-6. HOVER:[element_id] - Hover over an element to reveal menus or tooltips
-7. PRESS:[key] - Press keyboard keys (Enter, Escape, Tab, etc.) or key combinations (Ctrl+A, Ctrl+C)
-8. WAIT:[seconds] - Wait for a specified number of seconds for page changes
-9. CLEAR:[element_id] - Clear the content of an input field
-10. ANALYZE - Take a screenshot of the current page and extract specific information from the page as per the user's request
-11. COMPLETE - Mark the current task as finished
-12. PLAN:[task_description] - Create a step-by-step plan for a complex task
-
-TASK EXECUTION MODES:
-- SINGLE MODE: Execute one action based on user request
-- AUTONOMOUS MODE: When given a complex task, create a plan and execute steps automatically
-
-INSTRUCTIONS:
-- When you see highlighted elements, they have yellow borders and numbers. Use these numbers as element_ids.
-- For complex tasks (multiple steps), use PLAN: to break them down, then execute each step.
-- Always explain what you see and what action you're taking.
-- After each action, assess if you've completed the current step and what to do next.
-- Use COMPLETE when the overall task is finished.
-
-PLANNING FORMAT:
-When creating a plan, use this format:
-PLAN: [Brief task description]
-STEPS:
-1. [First step]
-2. [Second step] 
-3. [Third step]
-...
-
-Then execute each step automatically.`;
+    this.systemMessage = Prompts.getSystemMessage();
   }
 
   async initialize() {
@@ -701,18 +666,7 @@ Then execute each step automatically.`;
               "Detected complex task - creating execution plan..."
             );
 
-            const planningPrompt = `Complex task request: "${input}"
-
-This appears to be a multi-step task. Please create a detailed plan to accomplish this task autonomously. Use the PLAN format:
-
-PLAN: [Brief description]
-STEPS:
-1. [First step]
-2. [Second step]
-3. [Third step]
-...
-
-Then I will execute each step automatically.`;
+            const planningPrompt = Prompts.getPlanningPrompt(input);
 
             this.logger.ai(
               `Analyzing initial page with the following prompt: \n${planningPrompt}`
@@ -857,44 +811,12 @@ Then I will execute each step automatically.`;
     const screenshotPath = await this.takeScreenshot();
 
     // Ask AI to execute this specific step
-    const stepPrompt = `Current task: ${this.currentTask}
-Current step (${this.currentStepIndex + 1}/${
-      this.taskSteps.length
-    }): ${currentStep}
-
-CRITICAL: You MUST provide exactly ONE action command in the exact format specified below. Do not add brackets, quotes, or any additional text.
-
-REQUIRED ACTION FORMATS:
-- CLICK:3 (for clicking element 3)
-- TYPE:5:John Smith (for typing into element 5)
-- FETCH:https://example.com (for navigation - NO brackets!)
-- SCROLL:down (for scrolling)
-- SCROLL:up (for scrolling up)
-- SELECT:7:Option 1 (for selecting from dropdown)
-- HOVER:4 (for hovering over element)
-- PRESS:Enter (for pressing keys)
-- WAIT:3 (for waiting 3 seconds)
-- CLEAR:2 (for clearing element)
-
-EXAMPLES:
-✅ FETCH:https://docs.google.com/forms/example
-✅ CLICK:7
-✅ TYPE:2:Hello World
-✅ SCROLL:down
-✅ SELECT:5:United States
-✅ HOVER:3
-✅ PRESS:Enter
-✅ WAIT:2
-✅ CLEAR:4
-
-EXAMPLES OF WRONG FORMAT:
-❌ FETCH:[https://example.com]
-❌ CLICK:[7]
-❌ "FETCH:https://example.com"
-❌ SELECT:5:[United States]
-❌ I will navigate to the URL
-
-You MUST respond with exactly one action command. If you cannot determine a specific action, respond with "BREAKDOWN_NEEDED".`;
+    const stepPrompt = Prompts.getStepPrompt(
+      this.currentTask,
+      this.currentStepIndex,
+      this.taskSteps.length,
+      currentStep
+    );
 
     this.logger.ai(
       `Step ${this.currentStepIndex + 1}/${
@@ -1024,9 +946,7 @@ You MUST respond with exactly one action command. If you cannot determine a spec
             // Take final screenshot and provide results
             await this.highlightLinks();
             const finalScreenshot = await this.takeScreenshot();
-            const finalPrompt = `Task completed: ${this.currentTask}
-
-All steps have been executed. Please provide a summary of what was accomplished and any final results or information gathered.`;
+            const finalPrompt = Prompts.getFinalPrompt(this.currentTask);
 
             this.logger.ai(
               `Analyzing the page for the final step with the following prompt: \n${finalPrompt}`
@@ -1101,16 +1021,7 @@ All steps have been executed. Please provide a summary of what was accomplished 
       `${this.currentStepIndex}_verification.jpg`
     );
 
-    const verificationPrompt = `I need to verify if this step has been completed: "${step}"
-
-Please analyze the current page and determine if this specific step has been successfully completed.
-
-Respond with:
-- "COMPLETED" if the step has been fully accomplished
-- "INCOMPLETE" if the step has not been completed or only partially completed
-- "UNKNOWN" if you cannot determine the completion status
-
-Be very specific - only respond "COMPLETED" if you can clearly see evidence that the step was successfully accomplished.`;
+    const verificationPrompt = Prompts.getVerificationPrompt(step);
 
     this.logger.ai(
       `Verifying step completion with prompt: \n${verificationPrompt}`
@@ -1136,19 +1047,7 @@ Be very specific - only respond "COMPLETED" if you can clearly see evidence that
     );
 
     // Ask AI to create a sub-plan for this specific step
-    const subPlanPrompt = `Current step that needs breakdown: "${currentStep}"
-
-This step appears to be complex and cannot be completed with a single action. Please break this step down into smaller, actionable sub-steps.
-
-Create a detailed sub-plan using this format:
-SUB-PLAN: [Brief description of what this step involves]
-SUB-STEPS:
-1. [First specific action]
-2. [Second specific action]
-3. [Third specific action]
-...
-
-Each sub-step should be specific enough to be completed with a single DOM action.`;
+    const subPlanPrompt = Prompts.getSubPlanPrompt(currentStep);
 
     this.logger.ai(
       `Creating sub-plan for complex step with prompt: \n${subPlanPrompt}`
@@ -1248,40 +1147,12 @@ Each sub-step should be specific enough to be completed with a single DOM action
       );
 
       // Ask AI to execute this specific sub-step
-      const subStepPrompt = `Current sub-step (${i + 1}/${
-        subSteps.length
-      }): ${subStep}
-Parent step: ${parentStep}
-
-CRITICAL: Provide exactly ONE action command in the exact format below. NO brackets, quotes, or extra text.
-
-REQUIRED ACTION FORMATS:
-- CLICK:3 (for clicking element 3)
-- TYPE:5:John Smith (for typing into element 5)
-- FETCH:https://example.com (for navigation - NO brackets!)
-- SCROLL:down (for scrolling)
-- SELECT:7:Option 1 (for selecting from dropdown)
-- HOVER:4 (for hovering over element)
-- PRESS:Enter (for pressing keys)
-- WAIT:3 (for waiting 3 seconds)
-- CLEAR:2 (for clearing element)
-
-EXAMPLES:
-✅ FETCH:https://docs.google.com/forms/example
-✅ CLICK:7
-✅ TYPE:2:Hello World
-✅ SCROLL:down
-✅ SELECT:5:United States
-✅ HOVER:3
-✅ PRESS:Enter
-✅ WAIT:2
-✅ CLEAR:4
-
-❌ FETCH:[https://example.com]
-❌ CLICK:[7]
-❌ "CLICK:7"
-
-Return only the action command, nothing else.`;
+      const subStepPrompt = Prompts.getSubStepPrompt(
+        i + 1,
+        subSteps.length,
+        subStep,
+        parentStep
+      );
 
       this.logger.ai(`Analyzing sub-step with prompt: \n${subStepPrompt}`);
       const subStepResponse = await this.analyzeWithGPT4V(
