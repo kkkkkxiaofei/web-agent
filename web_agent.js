@@ -38,6 +38,14 @@ class WebAgent {
   async initialize() {
     this.logger.info("Initializing web agent...");
 
+    // Log verification status
+    const verificationEnabled = process.env.ENABLE_VERIFICATION === "true";
+    this.logger.info(
+      `Step verification: ${
+        verificationEnabled ? "ENABLED" : "DISABLED"
+      } (ENABLE_VERIFICATION=${process.env.ENABLE_VERIFICATION || "false"})`
+    );
+
     this.browser = await puppeteer.launch({
       headless: false,
       args: [
@@ -971,11 +979,27 @@ class WebAgent {
         );
         await this.waitFor(2000);
 
-        // CRITICAL: Verify step completion before moving to next step
-        const stepCompleted = await this.verifyStepCompletion(currentStep);
+        // Optional: Verify step completion before moving to next step
+        const verificationEnabled = process.env.ENABLE_VERIFICATION === "true";
+        let stepCompleted = true; // Default to true when verification is disabled
+
+        if (verificationEnabled) {
+          stepCompleted = await this.verifyStepCompletion(currentStep);
+
+          if (stepCompleted) {
+            this.logger.success(`Step verification passed: ${currentStep}`);
+          } else {
+            this.logger.warning(`Step verification failed: ${currentStep}`);
+            this.logger.info("Step needs further breakdown...");
+            return await this.handleStepBreakdown(currentStep, screenshotPath);
+          }
+        } else {
+          this.logger.debug(
+            "Step verification disabled - proceeding to next step"
+          );
+        }
 
         if (stepCompleted) {
-          this.logger.success(`Step verification passed: ${currentStep}`);
           this.currentStepIndex++;
 
           // Check if we've completed all steps
@@ -1003,10 +1027,6 @@ class WebAgent {
           }
 
           return true; // Continue to next step
-        } else {
-          this.logger.warning(`Step verification failed: ${currentStep}`);
-          this.logger.info("Step needs further breakdown...");
-          return await this.handleStepBreakdown(currentStep, screenshotPath);
         }
       } else {
         this.logger.error("Some actions failed, retrying step...");
@@ -1117,17 +1137,34 @@ class WebAgent {
       );
 
       if (subTaskSuccess) {
-        // Verify the overall step completion after sub-steps
-        const stepCompleted = await this.verifyStepCompletion(currentStep);
-        if (stepCompleted) {
+        // Optional: Verify the overall step completion after sub-steps
+        const verificationEnabled = process.env.ENABLE_VERIFICATION === "true";
+        let stepCompleted = true; // Default to true when verification is disabled
+
+        if (verificationEnabled) {
+          stepCompleted = await this.verifyStepCompletion(currentStep);
+
+          if (stepCompleted) {
+            this.logger.success(
+              `Complex step completed successfully: ${currentStep}`
+            );
+            this.currentStepIndex++;
+            return true;
+          } else {
+            this.logger.error(
+              `Complex step verification failed: ${currentStep}`
+            );
+            return true; // Retry the main step
+          }
+        } else {
+          this.logger.debug(
+            "Sub-step verification disabled - proceeding to next step"
+          );
           this.logger.success(
             `Complex step completed successfully: ${currentStep}`
           );
           this.currentStepIndex++;
           return true;
-        } else {
-          this.logger.error(`Complex step verification failed: ${currentStep}`);
-          return true; // Retry the main step
         }
       } else {
         this.logger.error(`Complex step failed: ${currentStep}`);
