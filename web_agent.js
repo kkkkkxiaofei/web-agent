@@ -734,23 +734,82 @@ class WebAgent {
       return;
     }
 
+    // Parse both single actions and comma-separated actions
+    let actions = [];
+
+    // First, try to find individual actions (existing logic)
     const actionMatch = aiResponse.match(
       /(CLICK|TYPE|FETCH|SCROLL|SELECT|HOVER|PRESS|WAIT|CLEAR|COMPLETE):[^\n]*/
     );
     if (actionMatch) {
-      const action = actionMatch[0];
-      this.logger.info(`Executing action: ${action}`);
+      actions.push(actionMatch[0]);
+    }
 
-      const success = await this.performAction(action, this.page);
-      if (success) {
-        this.logger.success("Action completed successfully");
-        // Take new screenshot after action
-        await this.waitFor(2000);
-        await this.highlightLinks();
-        await this.takeScreenshot();
-      } else {
-        this.logger.error("Action failed");
+    // Also check for comma-separated actions
+    const commaSeparatedPattern =
+      /(?:^|\n)\s*([A-Z]+:[^,\n]*(?:,[A-Z]+:[^,\n]*)*)\s*(?:\n|$)/g;
+    const commaSeparatedMatches = [
+      ...aiResponse.matchAll(commaSeparatedPattern),
+    ];
+
+    for (const match of commaSeparatedMatches) {
+      const line = match[1].trim();
+      if (line.includes(",")) {
+        // Split by comma and clean up each action
+        const commaSeparatedActions = line
+          .split(",")
+          .map((action) => action.trim());
+        // Verify each action has the correct format
+        const validActions = commaSeparatedActions.filter((action) =>
+          /^(CLICK|TYPE|FETCH|SCROLL|SELECT|HOVER|PRESS|WAIT|CLEAR|COMPLETE):/.test(
+            action
+          )
+        );
+        if (validActions.length > 0) {
+          actions.push(...validActions);
+        }
       }
+    }
+
+    // Remove duplicates while preserving order
+    actions = [...new Set(actions)];
+
+    if (actions.length > 0) {
+      this.logger.info(`Executing ${actions.length} action(s):`);
+      actions.forEach((action, index) => {
+        this.logger.info(`  ${index + 1}. ${action}`);
+      });
+
+      // Execute all actions sequentially
+      for (let i = 0; i < actions.length; i++) {
+        const action = actions[i];
+        this.logger.info(
+          `Executing action ${i + 1}/${actions.length}: ${action}`
+        );
+
+        const success = await this.performAction(action, this.page);
+        if (success) {
+          this.logger.success(
+            `Action ${i + 1}/${actions.length} completed successfully`
+          );
+          // Take new screenshot after each action
+          await this.waitFor(2000);
+          await this.highlightLinks();
+          await this.takeScreenshot();
+
+          // Add a small delay between actions if there are more
+          if (i < actions.length - 1) {
+            await this.waitFor(1000);
+          }
+        } else {
+          this.logger.error(
+            `Action ${i + 1}/${actions.length} failed: ${action}`
+          );
+          break; // Stop executing remaining actions if one fails
+        }
+      }
+    } else {
+      this.logger.warning("No valid actions found in response");
     }
   }
 
@@ -873,17 +932,52 @@ class WebAgent {
       `current-api-prompt.json`
     );
 
-    // Check for actions - find ALL actions, including multi-line responses
+    // Check for actions - find ALL actions, including multi-line responses and comma-separated actions
+    let allActions = [];
+
+    // First, find all actions using the existing regex pattern (line-by-line)
     const allActionMatches = [
       ...aiResponse.matchAll(
         /(CLICK|TYPE|FETCH|SCROLL|SELECT|HOVER|PRESS|WAIT|CLEAR|COMPLETE):[^\n\r]*/g
       ),
     ];
 
+    // Add line-by-line actions
+    allActions.push(...allActionMatches.map((match) => match[0]));
+
+    // Also check for comma-separated actions on a single line
+    const commaSeparatedPattern =
+      /(?:^|\n)\s*([A-Z]+:[^,\n]*(?:,[A-Z]+:[^,\n]*)*)\s*(?:\n|$)/g;
+    const commaSeparatedMatches = [
+      ...aiResponse.matchAll(commaSeparatedPattern),
+    ];
+
+    for (const match of commaSeparatedMatches) {
+      const line = match[1].trim();
+      if (line.includes(",")) {
+        // Split by comma and clean up each action
+        const commaSeparatedActions = line
+          .split(",")
+          .map((action) => action.trim());
+        // Verify each action has the correct format
+        const validActions = commaSeparatedActions.filter((action) =>
+          /^(CLICK|TYPE|FETCH|SCROLL|SELECT|HOVER|PRESS|WAIT|CLEAR|COMPLETE):/.test(
+            action
+          )
+        );
+        if (validActions.length > 0) {
+          allActions.push(...validActions);
+        }
+      }
+    }
+
+    // Remove duplicates while preserving order
+    allActions = [...new Set(allActions)];
+
     // Also check for ANALYZE actions (can appear on their own line)
     const analyzeMatches = aiResponse.match(/^ANALYZE$/gm);
     if (analyzeMatches) {
-      allActionMatches.push(...analyzeMatches.map((match) => ({ 0: match })));
+      allActions.push(...analyzeMatches);
     }
 
     // Special handling for standalone ANALYZE action
@@ -937,19 +1031,19 @@ class WebAgent {
       return true;
     }
 
-    if (allActionMatches.length > 0) {
-      const actions = allActionMatches.map((match) => match[0]);
-
-      this.logger.info(`Executing ${actions.length} action(s) for this step:`);
-      actions.forEach((action, index) => {
+    if (allActions.length > 0) {
+      this.logger.info(
+        `Executing ${allActions.length} action(s) for this step:`
+      );
+      allActions.forEach((action, index) => {
         this.logger.info(`  ${index + 1}. ${action}`);
       });
 
       // Execute all actions sequentially
       let allActionsSuccessful = true;
-      for (let i = 0; i < actions.length; i++) {
-        const action = actions[i];
-        this.logger.info(`⚡ Action ${i + 1}/${actions.length}: ${action}`);
+      for (let i = 0; i < allActions.length; i++) {
+        const action = allActions[i];
+        this.logger.info(`⚡ Action ${i + 1}/${allActions.length}: ${action}`);
 
         if (action === "COMPLETE") {
           this.taskCompleted = true;
@@ -959,14 +1053,16 @@ class WebAgent {
 
         const success = await this.performAction(action, this.page);
         if (success) {
-          this.logger.success(`✅ Action ${i + 1}/${actions.length} completed`);
+          this.logger.success(
+            `✅ Action ${i + 1}/${allActions.length} completed`
+          );
           // Add a small delay between actions
-          if (i < actions.length - 1) {
+          if (i < allActions.length - 1) {
             await this.waitFor(1000);
           }
         } else {
           this.logger.error(
-            `❌ Action ${i + 1}/${actions.length} failed: ${action}`
+            `❌ Action ${i + 1}/${allActions.length} failed: ${action}`
           );
           allActionsSuccessful = false;
           break; // Stop executing remaining actions if one fails
@@ -975,7 +1071,7 @@ class WebAgent {
 
       if (allActionsSuccessful) {
         this.logger.success(
-          `🎉 All ${actions.length} action(s) completed successfully for this step`
+          `🎉 All ${allActions.length} action(s) completed successfully for this step`
         );
         await this.waitFor(2000);
 

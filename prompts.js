@@ -65,9 +65,13 @@ Provide one or more action commands, one per line:
 CLICK:3
 (or multiple actions:)
 TYPE:1:John Smith
-TYPE:2:john@email.com
+TYPE:2:john@example.com
 TYPE:3:123 Main St
 CLICK:4
+
+For multiple actions, you can use either format:
+- Multiple lines (each action on separate line)
+- Comma-separated (all actions on one line): TYPE:1:name,TYPE:2:email,CLICK:3
 
 REQUIRED ACTION FORMATS (copy these exact patterns):
 - CLICK:3 (for clicking element with ID 3)
@@ -101,9 +105,9 @@ EXAMPLES:
 ✅ SCROLL:down
 ✅ ANALYZE
 ✅ TYPE:1:John Doe
-TYPE:2:john@example.com
-SELECT:3:United States
-CLICK:4
+✅ SELECT:3:United States
+✅ TYPE:1:name,TYPE:2:email,SELECT:3:United States,CLICK:4
+✅ TYPE:1:name,TYPE:2:email,CLICK:3
 
 EXAMPLES OF WRONG FORMAT:
 ❌ FETCH:[https://example.com]
@@ -158,6 +162,10 @@ TYPE:1:value
 TYPE:2:value2
 CLICK:3
 
+For multiple actions, you can use either format:
+- Multiple lines (each action on separate line)  
+- Comma-separated (all actions on one line): TYPE:1:value,TYPE:2:value2,CLICK:3
+
 REQUIRED ACTION FORMATS:
 - CLICK:3 (for clicking element 3)
 - TYPE:5:John Smith (for typing into element 5)
@@ -181,6 +189,7 @@ EXAMPLES:
 ✅ WAIT:2
 ✅ CLEAR:4
 ✅ ANALYZE
+✅ TYPE:1:name,TYPE:2:email,CLICK:3
 
 ❌ FETCH:[https://example.com]
 ❌ CLICK:[7]
