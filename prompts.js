@@ -58,7 +58,16 @@ Then I will execute each step automatically.`;
     return `Current task: ${currentTask}
 Current step (${currentStepIndex + 1}/${totalSteps}): ${currentStep}
 
-CRITICAL: You MUST provide exactly ONE action command in the exact format specified below. Do not add brackets, quotes, or any additional text.
+CRITICAL: Provide the action command(s) needed to complete this step. Use the exact format specified below.
+
+ACTION FORMAT:
+Provide one or more action commands, one per line:
+CLICK:3
+(or multiple actions:)
+TYPE:1:John Smith
+TYPE:2:john@email.com
+TYPE:3:123 Main St
+CLICK:4
 
 REQUIRED ACTION FORMATS (copy these exact patterns):
 - CLICK:3 (for clicking element with ID 3)
@@ -72,6 +81,7 @@ REQUIRED ACTION FORMATS (copy these exact patterns):
 - PRESS:Ctrl+A (for pressing Ctrl+A combination)
 - WAIT:3 (for waiting 3 seconds)
 - CLEAR:2 (for clearing content in element 2)
+- ANALYZE (for analyzing and extracting information from the current page)
 
 STEP ANALYSIS REQUIREMENTS:
 1. If this step involves navigation/going to a URL → Use FETCH:URL_HERE (NO brackets!)
@@ -83,27 +93,26 @@ STEP ANALYSIS REQUIREMENTS:
 7. If this step involves keyboard actions → Use PRESS:key_or_combination
 8. If this step involves waiting for changes → Use WAIT:seconds
 9. If this step involves clearing a field → Use CLEAR:element_id
+10. If this step involves analyzing/extracting information → Use ANALYZE
 
-EXAMPLES OF CORRECT FORMAT:
+EXAMPLES:
 ✅ FETCH:https://docs.google.com/forms/example
 ✅ CLICK:7
-✅ TYPE:2:Hello World
 ✅ SCROLL:down
-✅ SELECT:5:United States
-✅ HOVER:3
-✅ PRESS:Enter
-✅ PRESS:Ctrl+C
-✅ WAIT:5
-✅ CLEAR:4
+✅ ANALYZE
+✅ TYPE:1:John Doe
+TYPE:2:john@example.com
+SELECT:3:United States
+CLICK:4
 
 EXAMPLES OF WRONG FORMAT:
 ❌ FETCH:[https://example.com]
 ❌ CLICK:[7]
 ❌ "FETCH:https://example.com"
 ❌ SELECT:5:[United States]
-❌ I will navigate to the URL
+❌ [TYPE:1:name, TYPE:2:email]
 
-You MUST respond with exactly one action command. If you cannot determine a specific action, respond with "BREAKDOWN_NEEDED".`;
+EFFICIENCY RULE: If you can complete this step with multiple related actions (like filling multiple form fields), provide all actions at once instead of requesting a breakdown. Only respond with "BREAKDOWN_NEEDED" if the step is genuinely complex and cannot be expressed as a sequence of actions.`;
   }
 
   static getVerificationPrompt(step) {
@@ -139,7 +148,15 @@ Each sub-step should be specific enough to be completed with a single DOM action
     return `Current sub-step (${subStepIndex + 1}/${totalSubSteps}): ${subStep}
 Parent step: ${parentStep}
 
-CRITICAL: Provide exactly ONE action command in the exact format below. NO brackets, quotes, or extra text.
+CRITICAL: Provide the action command(s) needed to complete this sub-step.
+
+ACTION FORMAT:
+Provide one or more action commands, one per line:
+CLICK:3
+(or multiple if needed:)
+TYPE:1:value
+TYPE:2:value2
+CLICK:3
 
 REQUIRED ACTION FORMATS:
 - CLICK:3 (for clicking element 3)
@@ -151,6 +168,7 @@ REQUIRED ACTION FORMATS:
 - PRESS:Enter (for pressing keys)
 - WAIT:3 (for waiting 3 seconds)
 - CLEAR:2 (for clearing element)
+- ANALYZE (for analyzing and extracting information)
 
 EXAMPLES:
 ✅ FETCH:https://docs.google.com/forms/example
@@ -162,12 +180,13 @@ EXAMPLES:
 ✅ PRESS:Enter
 ✅ WAIT:2
 ✅ CLEAR:4
+✅ ANALYZE
 
 ❌ FETCH:[https://example.com]
 ❌ CLICK:[7]
 ❌ "CLICK:7"
 
-Return only the action command, nothing else.`;
+Return only the action command(s), nothing else.`;
   }
 
   static getFinalPrompt(currentTask) {

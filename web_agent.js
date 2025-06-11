@@ -727,6 +727,14 @@ class WebAgent {
 
   // Handle single actions (backward compatibility)
   async handleSingleAction(aiResponse) {
+    // Check for ANALYZE action first (no colon needed)
+    if (aiResponse.trim() === "ANALYZE" || aiResponse.includes("ANALYZE")) {
+      this.logger.info(
+        "Analysis action detected - current page already analyzed"
+      );
+      return;
+    }
+
     const actionMatch = aiResponse.match(
       /(CLICK|TYPE|FETCH|SCROLL|SELECT|HOVER|PRESS|WAIT|CLEAR|COMPLETE):[^\n]*/
     );
@@ -866,12 +874,56 @@ class WebAgent {
       `current-api-prompt.json`
     );
 
-    // Check for actions - find ALL actions, not just the first one
+    // Check for actions - find ALL actions, including multi-line responses
     const allActionMatches = [
       ...aiResponse.matchAll(
-        /(CLICK|TYPE|FETCH|SCROLL|SELECT|HOVER|PRESS|WAIT|CLEAR|COMPLETE):[^\n]*/g
+        /(CLICK|TYPE|FETCH|SCROLL|SELECT|HOVER|PRESS|WAIT|CLEAR|COMPLETE):[^\n\r]*/g
       ),
     ];
+
+    // Also check for ANALYZE actions (can appear on their own line)
+    const analyzeMatches = aiResponse.match(/^ANALYZE$/gm);
+    if (analyzeMatches) {
+      allActionMatches.push(...analyzeMatches.map((match) => ({ 0: match })));
+    }
+
+    // Special handling for standalone ANALYZE action
+    if (
+      aiResponse.trim() === "ANALYZE" ||
+      (analyzeMatches && analyzeMatches.length > 0)
+    ) {
+      this.logger.info("Analysis action detected - analyzing current page");
+
+      // For analysis steps, we consider them completed immediately since they just extract info
+      this.logger.success("Analysis completed");
+      this.currentStepIndex++;
+
+      // Check if we've completed all steps
+      if (this.currentStepIndex >= this.taskSteps.length) {
+        this.logger.success(
+          "All planned steps completed! Generating final analysis..."
+        );
+
+        // Take final screenshot and provide results
+        await this.highlightLinks();
+        const finalScreenshot = await this.takeScreenshot();
+        const finalPrompt = Prompts.getFinalPrompt(this.currentTask);
+
+        this.logger.ai(
+          `Analyzing the page for the final step with the following prompt: \n${finalPrompt}`
+        );
+        const finalResponse = await this.analyzeWithGPT4V(
+          finalScreenshot,
+          finalPrompt
+        );
+        this.logger.success(`FINAL RESULTS:\n${finalResponse}`);
+
+        this.taskCompleted = true;
+        return false; // Stop execution
+      }
+
+      return true; // Continue to next step
+    }
 
     // Check for explicit breakdown request
     if (aiResponse.includes("BREAKDOWN_NEEDED")) {
@@ -888,17 +940,17 @@ class WebAgent {
 
     if (allActionMatches.length > 0) {
       const actions = allActionMatches.map((match) => match[0]);
-      this.logger.info(
-        `Found ${actions.length} action(s) to execute: ${actions.join(", ")}`
-      );
+
+      this.logger.info(`Executing ${actions.length} action(s) for this step:`);
+      actions.forEach((action, index) => {
+        this.logger.info(`  ${index + 1}. ${action}`);
+      });
 
       // Execute all actions sequentially
       let allActionsSuccessful = true;
       for (let i = 0; i < actions.length; i++) {
         const action = actions[i];
-        this.logger.info(
-          `Executing action ${i + 1}/${actions.length}: ${action}`
-        );
+        this.logger.info(`⚡ Action ${i + 1}/${actions.length}: ${action}`);
 
         if (action === "COMPLETE") {
           this.taskCompleted = true;
@@ -908,16 +960,14 @@ class WebAgent {
 
         const success = await this.performAction(action, this.page);
         if (success) {
-          this.logger.success(
-            `Action ${i + 1}/${actions.length} completed successfully`
-          );
+          this.logger.success(`✅ Action ${i + 1}/${actions.length} completed`);
           // Add a small delay between actions
           if (i < actions.length - 1) {
             await this.waitFor(1000);
           }
         } else {
           this.logger.error(
-            `Action ${i + 1}/${actions.length} failed: ${action}`
+            `❌ Action ${i + 1}/${actions.length} failed: ${action}`
           );
           allActionsSuccessful = false;
           break; // Stop executing remaining actions if one fails
@@ -926,7 +976,7 @@ class WebAgent {
 
       if (allActionsSuccessful) {
         this.logger.success(
-          `All ${actions.length} actions completed successfully`
+          `🎉 All ${actions.length} action(s) completed successfully for this step`
         );
         await this.waitFor(2000);
 
@@ -1161,25 +1211,68 @@ class WebAgent {
       );
       this.logger.ai(`Sub-step response: ${subStepResponse}`);
 
-      // Parse and execute the sub-step action
-      const actionMatch = subStepResponse.match(
-        /(CLICK|TYPE|FETCH|SCROLL|SELECT|HOVER|PRESS|WAIT|CLEAR):[^\n]*/
-      );
+      // Parse and execute the sub-step action(s)
+      if (
+        subStepResponse.trim() === "ANALYZE" ||
+        subStepResponse.includes("ANALYZE")
+      ) {
+        this.logger.info("Analysis sub-step detected - analyzing current page");
+        this.logger.success(
+          `Sub-step ${i + 1}/${subSteps.length} completed (analysis)`
+        );
+        await this.waitFor(1000);
+        continue; // Move to next sub-step
+      }
 
-      if (actionMatch) {
-        const action = actionMatch[0];
-        this.logger.info(`Executing sub-step action: ${action}`);
+      // Check for multiple actions in sub-step response
+      const subActionMatches = [
+        ...subStepResponse.matchAll(
+          /(CLICK|TYPE|FETCH|SCROLL|SELECT|HOVER|PRESS|WAIT|CLEAR):[^\n\r]*/g
+        ),
+      ];
 
-        const success = await this.performAction(action, this.page);
-        if (success) {
+      if (subActionMatches.length > 0) {
+        const subActions = subActionMatches.map((match) => match[0]);
+
+        this.logger.info(
+          `Sub-step ${i + 1}/${subSteps.length} executing ${
+            subActions.length
+          } action(s):`
+        );
+        subActions.forEach((action, index) => {
+          this.logger.info(`    ${index + 1}. ${action}`);
+        });
+
+        // Execute all sub-actions sequentially
+        let allSubActionsSuccessful = true;
+        for (let j = 0; j < subActions.length; j++) {
+          const action = subActions[j];
+
+          const success = await this.performAction(action, this.page);
+          if (success) {
+            this.logger.success(
+              `✅ Sub-action ${j + 1}/${subActions.length} completed`
+            );
+            // Add a small delay between sub-actions
+            if (j < subActions.length - 1) {
+              await this.waitFor(500);
+            }
+          } else {
+            this.logger.error(
+              `❌ Sub-action ${j + 1}/${subActions.length} failed: ${action}`
+            );
+            allSubActionsSuccessful = false;
+            break;
+          }
+        }
+
+        if (allSubActionsSuccessful) {
           this.logger.success(
             `Sub-step ${i + 1}/${subSteps.length} completed successfully`
           );
           await this.waitFor(1000); // Brief delay between sub-steps
         } else {
-          this.logger.error(
-            `Sub-step ${i + 1}/${subSteps.length} failed: ${action}`
-          );
+          this.logger.error(`Sub-step ${i + 1}/${subSteps.length} failed`);
           return false; // Sub-task failed
         }
       } else {
