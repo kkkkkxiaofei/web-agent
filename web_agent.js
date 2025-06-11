@@ -242,9 +242,9 @@ class WebAgent {
           const scrollTop =
             window.pageYOffset || document.documentElement.scrollTop;
 
-          numberOverlay.style.position = "fixed";
-          numberOverlay.style.top = rect.top - 8 + "px";
-          numberOverlay.style.left = rect.left - 8 + "px";
+          numberOverlay.style.position = "absolute";
+          numberOverlay.style.top = rect.top + scrollTop - 8 + "px";
+          numberOverlay.style.left = rect.left + scrollLeft - 8 + "px";
           numberOverlay.style.zIndex = "10000";
 
           // Add to document body instead of element
