@@ -154,26 +154,8 @@ class WebAgent {
     }
   }
 
-  async takeScreenshot(
-    filename,
-    isSubTask = false,
-    subTaskIndex = null,
-    parentStepIndex = null
-  ) {
-    let uniqFilename;
-
-    if (filename) {
-      // Custom filename provided
-      uniqFilename = filename;
-    } else if (isSubTask && subTaskIndex !== null && parentStepIndex !== null) {
-      // Subtask screenshot: parentStep_sub_subIndex_current_page.jpg
-      uniqFilename = `${parentStepIndex}_sub_${subTaskIndex}_current_page.jpg`;
-    } else {
-      // Regular step screenshot
-      uniqFilename = `${this.currentStepIndex}_current_page.jpg`;
-    }
-
-    const filePath = `logs/${PROCESS_ID}/${uniqFilename}`;
+  async takeScreenshot(filename) {
+    const filePath = `logs/${PROCESS_ID}/${filename}`;
     try {
       await this.page.screenshot({
         path: filePath,
@@ -565,7 +547,7 @@ class WebAgent {
           this.logger.warning(`Element ${elementId} not found for clearing`);
           return false;
         }
-      } else if (action === "ANALYZE") {
+      } else if (action.startsWith("ANALYZE")) {
         const analysisPrompt = action.replace("ANALYZE:", "").trim();
         const analysisResponse = await this.analyzeWithClaude(
           this.screenshotPath,
@@ -970,7 +952,11 @@ class WebAgent {
           // Take new screenshot after each action
           await this.waitFor(2000);
           await this.highlightLinks();
-          await this.takeScreenshot();
+          await this.takeScreenshot(
+            `step${this.currentStepIndex + 1}-action${
+              i + 1
+            }-${new Date().toISOString()}.jpg`
+          );
 
           // Add a small delay between actions if there are more
           if (i < actions.length - 1) {
@@ -1081,24 +1067,27 @@ class WebAgent {
 
   // Extract and parse task plan from AI response
   parsePlan(aiResponse) {
-    const planMatch = aiResponse.match(/PLAN:\s*(.+?)(?:\n|$)/i);
-    const stepsMatch = aiResponse.match(/STEPS:\s*([\s\S]*?)(?:\n\n|$)/i);
+    // Regex to extract the PLAN
+    const planRegex = /PLAN:(.*?)\n\s*STEPS:/s;
+    const planMatch = aiResponse.match(planRegex);
+    const planDescription = planMatch ? planMatch[1].trim() : "";
 
-    if (planMatch && stepsMatch) {
-      const taskDescription = planMatch[1].trim();
-      const stepsText = stepsMatch[1];
-      const steps = stepsText
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => /^\d+\./.test(line))
-        .map((line) => line.replace(/^\d+\.\s*/, ""));
+    // Regex to extract the STEPS
+    const stepsRegex = /STEPS:(.*?)(?:Let\s+me\s+start|$)/s;
+    const stepsMatch = aiResponse.match(stepsRegex);
+    const stepsText = stepsMatch ? stepsMatch[1].trim() : "";
+    const steps = stepsText
+      .split("\n\n")
+      .filter((step) => /^\d+\./.test(step.trim().split("\n")[0]))
+      .map((step) => step.replace(/^\d+\.\s*/, "").trim());
 
-      return {
-        task: taskDescription,
-        steps: steps,
-      };
+    if (steps.length === 0) {
+      return null;
     }
-    return null;
+    return {
+      task: planDescription,
+      steps: steps,
+    };
   }
 
   // Execute a single step in the current task
@@ -1117,7 +1106,7 @@ class WebAgent {
     // Take screenshot and analyze for this step
     await this.highlightLinks();
     const screenshotPath = await this.takeScreenshot(
-      `${this.currentStepIndex + 1}/${this.taskSteps.length}.jpg`
+      `step${this.currentStepIndex + 1}-${new Date().toISOString()}.jpg`
     );
 
     // Ask AI to execute this specific step
@@ -1176,7 +1165,7 @@ class WebAgent {
       `current-api-prompt.json`
     );
 
-    // Check for actions - find ALL actions, including multi-line responses and comma-separated actions
+    // Parse semicolon-separated actions
     let allActions = [];
 
     // Split by semicolon and clean up each action
@@ -1193,11 +1182,11 @@ class WebAgent {
     );
 
     if (validActions.length > 0) {
-      actions = validActions;
+      allActions = validActions;
     }
 
     // Remove duplicates while preserving order
-    allActions = [...new Set(actions)];
+    allActions = [...new Set(allActions)];
 
     // Check for explicit breakdown request
     if (aiResponse.includes("BREAKDOWN_NEEDED")) {
@@ -1287,7 +1276,7 @@ class WebAgent {
 
             // Take final screenshot and provide results
             await this.highlightLinks();
-            const finalScreenshot = await this.takeScreenshot();
+            const finalScreenshot = await this.takeScreenshot("final_page.jpg");
             const finalPrompt = Prompts.getFinalPrompt(this.currentTask);
 
             this.logger.ai(
@@ -1312,7 +1301,7 @@ class WebAgent {
     } else {
       // No direct actions found - this might be a complex step that needs breakdown
       this.logger.warning("No DOM action found in AI response for this step!");
-      return await this.handleStepBreakdown(currentStep, screenshotPath);
+      // return await this.handleStepBreakdown(currentStep, screenshotPath);
     }
   }
 
@@ -1498,10 +1487,9 @@ class WebAgent {
       // Take screenshot and analyze for this sub-step with subtask context
       await this.highlightLinks();
       const screenshotPath = await this.takeScreenshot(
-        null, // no custom filename
-        true, // isSubTask = true
-        i + 1, // subTaskIndex (1-based)
-        parentStepIndex // parentStepIndex
+        `step${parentStepIndex + 1}-subtask${
+          i + 1
+        }-${new Date().toISOString()}.jpg` // no custom filename
       );
 
       // Ask AI to execute this specific sub-step
