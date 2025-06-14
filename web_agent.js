@@ -59,20 +59,36 @@ class WebAgent {
     );
 
     this.browser = await puppeteer.launch({
-      headless: false,
+      headless: false, // Run in visible mode for debugging and SSO
       args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--single-process",
-        "--disable-web-security",
-        "--ignore-certificate-errors",
-        "--disable-features=IsolateOrigins",
-        "--disable-site-isolation-trials",
-        "--allow-running-insecure-content",
-        "--start-maximized",
+        // Security and sandbox options
+        "--no-sandbox", // Disable Chrome's sandbox (needed for some environments)
+        "--disable-setuid-sandbox", // Disable setuid sandbox (needed when running as root)
+
+        // Cross-origin and security settings
+        "--disable-web-security", // Disable same-origin policy (needed for SSO and cross-origin requests)
+        "--disable-features=IsolateOrigins,site-per-process", // Disable site isolation (helps with SSO redirects)
+        "--disable-site-isolation-trials", // Disable site isolation trials (prevents redirect issues)
+        "--disable-features=BlockInsecurePrivateNetworkRequests", // Allow requests to private networks (needed for internal SSO)
+
+        // Cookie and content settings
+        "--allow-running-insecure-content", // Allow mixed content (needed for some SSO providers)
+        "--disable-features=SameSiteByDefaultCookies,CookiesWithoutSameSiteMustBeSecure", // Allow cross-site cookies (essential for SSO)
+
+        // OAuth2 and redirect handling
+        "--disable-features=IsolateOrigins", // Disable origin isolation (helps with redirects)
+        "--disable-site-isolation-trials", // Disable site isolation trials (prevents redirect issues)
+        "--disable-features=OutOfBlinkCors", // Disable CORS restrictions in Blink
+        "--disable-features=CrossOriginOpenerPolicy", // Disable cross-origin opener policy
+        "--disable-features=CrossOriginEmbedderPolicy", // Disable cross-origin embedder policy
+        "--disable-features=CrossOriginResourcePolicy", // Disable cross-origin resource policy
+
+        // Additional settings
+        "--start-maximized", // Start browser maximized for better visibility
       ],
-      // Increase timeout for browser launch
-      timeout: 60000,
+      ignoreHTTPSErrors: true, // Ignore HTTPS errors (needed for self-signed certificates)
+      defaultViewport: null, // Use browser's default viewport (better for responsive sites)
+      timeout: 60000, // 60 second timeout for browser launch (needed for slow connections)
     });
 
     const pages = await this.browser.pages();
@@ -82,6 +98,43 @@ class WebAgent {
     if (!this.page) {
       this.page = await this.browser.newPage();
     }
+
+    // Set default navigation timeout (60 seconds)
+    // This gives enough time for SSO redirects to complete
+    this.page.setDefaultNavigationTimeout(60000);
+
+    // Set default timeout for all operations (60 seconds)
+    // Prevents timeouts during complex operations
+    this.page.setDefaultTimeout(60000);
+
+    // Enable request interception to monitor and handle redirects
+    // This helps debug SSO flow issues
+    await this.page.setRequestInterception(true);
+
+    // Handle requests
+    // Log and continue all requests to monitor the SSO flow
+    this.page.on("request", (request) => {
+      // Continue all requests
+      request.continue();
+    });
+
+    // Handle response errors
+    // Log any failed requests or redirects
+    this.page.on("response", (response) => {
+      if (response.status() >= 400) {
+        this.logger.warning(
+          `Response error: ${response.status()} ${response.url()}`
+        );
+      }
+    });
+
+    // Handle console messages
+    // Log any JavaScript errors that might affect SSO
+    this.page.on("console", (msg) => {
+      if (msg.type() === "error") {
+        this.logger.error(`Page error: ${msg.text()}`);
+      }
+    });
 
     await this.page.setViewport({
       width: 1280,
@@ -512,8 +565,15 @@ class WebAgent {
           this.logger.warning(`Element ${elementId} not found for clearing`);
           return false;
         }
-      } else if (action === "ANALYZE" || action === "COMPLETE") {
-        return true; // No action needed
+      } else if (action === "ANALYZE") {
+        const analysisPrompt = action.replace("ANALYZE:", "").trim();
+        const analysisResponse = await this.analyzeWithClaude(
+          this.screenshotPath,
+          analysisPrompt
+        );
+        this.logger.success(`Analyzed with prompt: ${analysisPrompt}`);
+        this.logger.success(`AnalysisResponse: ${analysisResponse}`);
+        return true;
       }
 
       return false;
@@ -633,6 +693,92 @@ class WebAgent {
     }
   }
 
+  // New function for prompt-only analysis
+  async analyzeWithPromptOnly(userPrompt) {
+    try {
+      const messages = [...this.conversationHistory];
+
+      if (!userPrompt) {
+        throw new Error("Prompt is required for prompt-only analysis");
+      }
+
+      messages.push({
+        role: "user",
+        content: userPrompt,
+      });
+
+      const response = await this.anthropic.messages.create({
+        model: this.modelName,
+        max_tokens: 1000,
+        temperature: 0.1,
+        system: this.systemMessage,
+        messages: messages,
+      });
+
+      const aiResponse = response.content[0].text;
+
+      // Track token usage
+      const inputTokens = response.usage?.input_tokens || 0;
+      const outputTokens = response.usage?.output_tokens || 0;
+      const totalTokens = inputTokens + outputTokens;
+
+      // Update total token counts
+      this.tokenUsage.totalInputTokens += inputTokens;
+      this.tokenUsage.totalOutputTokens += outputTokens;
+      this.tokenUsage.totalSteps++;
+
+      // Log current step token usage
+      const stepInfo = {
+        step: this.tokenUsage.totalSteps,
+        inputTokens: inputTokens,
+        outputTokens: outputTokens,
+        totalTokens: totalTokens,
+        stepDescription: this.currentTask
+          ? `Step ${this.currentStepIndex + 1}/${this.taskSteps.length}`
+          : "Prompt Only Analysis",
+        timestamp: new Date().toISOString(),
+      };
+
+      this.tokenUsage.stepUsage.push(stepInfo);
+
+      // Log token usage for this step
+      this.logger.info(
+        `🔢 Token usage - Step ${this.tokenUsage.totalSteps}: Input: ${inputTokens}, Output: ${outputTokens}, Total: ${totalTokens}`
+      );
+
+      // Update conversation history
+      const userMessage = {
+        role: "user",
+        content: userPrompt,
+      };
+
+      const assistantMessage = {
+        role: "assistant",
+        content: aiResponse,
+      };
+
+      // Update both histories
+      this.conversationHistory.push(userMessage);
+      this.fullConversationHistory.push(userMessage);
+      this.conversationHistory.push(assistantMessage);
+      this.fullConversationHistory.push(assistantMessage);
+
+      // Keep conversation history manageable for API calls (save tokens)
+      if (this.conversationHistory.length > 20) {
+        this.conversationHistory = this.conversationHistory.slice(-20);
+      }
+
+      // Log full conversation count
+      this.logger.debug(
+        `Conversation history: ${this.conversationHistory.length} messages (API), ${this.fullConversationHistory.length} messages (full log)`
+      );
+
+      return aiResponse;
+    } catch (error) {
+      throw new Error(`Claude prompt-only analysis failed: ${error.message}`);
+    }
+  }
+
   async startInteractiveSession() {
     const rl = readline.createInterface({
       input: process.stdin,
@@ -651,15 +797,6 @@ class WebAgent {
     this.logger.info("EXAMPLE COMPLEX TASKS:");
     this.logger.info(
       "• 'Go to https://npmjs.com and find the Pricing page, then tell me the pricing for each category'"
-    );
-    this.logger.info(
-      "• 'Search for react tutorial and then click on the first result'"
-    );
-    this.logger.info(
-      "• 'Navigate to the contact page and fill out the contact form'"
-    );
-    this.logger.info(
-      "• 'Find the documentation section and then locate the API reference'"
     );
     this.logger.info("COMMANDS:");
     this.logger.info("- Enter a URL to navigate");
@@ -716,10 +853,8 @@ class WebAgent {
             this.logger.ai(
               `Analyzing initial page with the following prompt: \n${planningPrompt}`
             );
-            aiResponse = await this.analyzeWithClaude(
-              screenshotPath,
-              planningPrompt
-            );
+            aiResponse = await this.analyzeWithPromptOnly(planningPrompt);
+
             this.logger.ai(`AI Response: ${aiResponse}`);
 
             // Parse the plan
@@ -743,9 +878,9 @@ class WebAgent {
                 "Could not parse the plan. Falling back to single action mode."
               );
               // Fall back to single action mode
-              aiResponse = await this.analyzeWithClaude(screenshotPath, input);
+              aiResponse = await this.analyzeWithPromptOnly(input);
               this.logger.ai(`AI Response: ${aiResponse}`);
-              await this.handleSingleAction(aiResponse);
+              await this.extractAndPerformActions(aiResponse);
 
               // Display token usage for fallback single action
               const currentTotalTokens =
@@ -758,9 +893,9 @@ class WebAgent {
           } else {
             // Handle simple single action
             this.logger.info("Handling as single action...");
-            aiResponse = await this.analyzeWithClaude(screenshotPath, input);
+            aiResponse = await this.analyzeWithPromptOnly(input);
             this.logger.ai(`AI Response: ${aiResponse}`);
-            await this.handleSingleAction(aiResponse);
+            await this.extractAndPerformActions(aiResponse);
 
             // Display token usage for single action
             const currentTotalTokens =
@@ -790,49 +925,25 @@ class WebAgent {
   }
 
   // Handle single actions (backward compatibility)
-  async handleSingleAction(aiResponse) {
-    // Check for ANALYZE action first (no colon needed)
-    if (aiResponse.trim() === "ANALYZE" || aiResponse.includes("ANALYZE")) {
-      this.logger.info(
-        "Analysis action detected - current page already analyzed"
-      );
-      return;
-    }
-
-    // Parse both single actions and comma-separated actions
+  async extractAndPerformActions(aiResponse) {
+    // Parse semicolon-separated actions
     let actions = [];
 
-    // Parse actions line by line, checking for comma-separated format first
-    const lines = aiResponse
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line);
+    // Split by semicolon and clean up each action
+    const semicolonSeparatedActions = aiResponse
+      .split(";")
+      .map((action) => action.trim())
+      .filter((action) => action); // Remove empty actions
 
-    for (const line of lines) {
-      // Check if this line contains comma-separated actions
-      if (line.includes(",") && /^[A-Z]+:/.test(line)) {
-        // Split by comma and clean up each action
-        const commaSeparatedActions = line
-          .split(",")
-          .map((action) => action.trim());
-        // Verify each action has the correct format
-        const validActions = commaSeparatedActions.filter((action) =>
-          /^(CLICK|TYPE|FETCH|SCROLL|SELECT|HOVER|PRESS|WAIT|CLEAR|COMPLETE):/.test(
-            action
-          )
-        );
-        if (validActions.length > 0) {
-          actions.push(...validActions);
-        }
-      } else {
-        // Check for single action on this line
-        const singleActionMatch = line.match(
-          /^(CLICK|TYPE|FETCH|SCROLL|SELECT|HOVER|PRESS|WAIT|CLEAR|COMPLETE):[^\n\r]*/
-        );
-        if (singleActionMatch) {
-          actions.push(singleActionMatch[0]);
-        }
-      }
+    // Verify each action has the correct format
+    const validActions = semicolonSeparatedActions.filter((action) =>
+      /^(CLICK|TYPE|FETCH|SCROLL|SELECT|HOVER|PRESS|WAIT|CLEAR|COMPLETE|ANALYZE):/.test(
+        action
+      )
+    );
+
+    if (validActions.length > 0) {
+      actions = validActions;
     }
 
     // Remove duplicates while preserving order
@@ -1005,7 +1116,9 @@ class WebAgent {
 
     // Take screenshot and analyze for this step
     await this.highlightLinks();
-    const screenshotPath = await this.takeScreenshot();
+    const screenshotPath = await this.takeScreenshot(
+      `${this.currentStepIndex + 1}/${this.taskSteps.length}.jpg`
+    );
 
     // Ask AI to execute this specific step
     const stepPrompt = Prompts.getStepPrompt(
@@ -1066,85 +1179,25 @@ class WebAgent {
     // Check for actions - find ALL actions, including multi-line responses and comma-separated actions
     let allActions = [];
 
-    // Parse actions line by line, checking for comma-separated format first
-    const lines = aiResponse
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line);
+    // Split by semicolon and clean up each action
+    const semicolonSeparatedActions = aiResponse
+      .split(";")
+      .map((action) => action.trim())
+      .filter((action) => action); // Remove empty actions
 
-    for (const line of lines) {
-      // Check if this line contains comma-separated actions
-      if (line.includes(",") && /^[A-Z]+:/.test(line)) {
-        // Split by comma and clean up each action
-        const commaSeparatedActions = line
-          .split(",")
-          .map((action) => action.trim());
-        // Verify each action has the correct format
-        const validActions = commaSeparatedActions.filter((action) =>
-          /^(CLICK|TYPE|FETCH|SCROLL|SELECT|HOVER|PRESS|WAIT|CLEAR|COMPLETE):/.test(
-            action
-          )
-        );
-        if (validActions.length > 0) {
-          allActions.push(...validActions);
-        }
-      } else {
-        // Check for single action on this line
-        const singleActionMatch = line.match(
-          /^(CLICK|TYPE|FETCH|SCROLL|SELECT|HOVER|PRESS|WAIT|CLEAR|COMPLETE):[^\n\r]*/
-        );
-        if (singleActionMatch) {
-          allActions.push(singleActionMatch[0]);
-        }
-      }
+    // Verify each action has the correct format
+    const validActions = semicolonSeparatedActions.filter((action) =>
+      /^(CLICK|TYPE|FETCH|SCROLL|SELECT|HOVER|PRESS|WAIT|CLEAR|COMPLETE|ANALYZE):/.test(
+        action
+      )
+    );
+
+    if (validActions.length > 0) {
+      actions = validActions;
     }
 
     // Remove duplicates while preserving order
-    allActions = [...new Set(allActions)];
-
-    // Also check for ANALYZE actions (can appear on their own line)
-    const analyzeMatches = aiResponse.match(/^ANALYZE$/gm);
-    if (analyzeMatches) {
-      allActions.push(...analyzeMatches);
-    }
-
-    // Special handling for standalone ANALYZE action
-    if (
-      aiResponse.trim() === "ANALYZE" ||
-      (analyzeMatches && analyzeMatches.length > 0)
-    ) {
-      this.logger.info("Analysis action detected - analyzing current page");
-
-      // For analysis steps, we consider them completed immediately since they just extract info
-      this.logger.success("Analysis completed");
-      this.currentStepIndex++;
-
-      // Check if we've completed all steps
-      if (this.currentStepIndex >= this.taskSteps.length) {
-        this.logger.success(
-          "All planned steps completed! Generating final analysis..."
-        );
-
-        // Take final screenshot and provide results
-        await this.highlightLinks();
-        const finalScreenshot = await this.takeScreenshot();
-        const finalPrompt = Prompts.getFinalPrompt(this.currentTask);
-
-        this.logger.ai(
-          `Analyzing the page for the final step with the following prompt: \n${finalPrompt}`
-        );
-        const finalResponse = await this.analyzeWithClaude(
-          finalScreenshot,
-          finalPrompt
-        );
-        this.logger.success(`FINAL RESULTS:\n${finalResponse}`);
-
-        this.taskCompleted = true;
-        return false; // Stop execution
-      }
-
-      return true; // Continue to next step
-    }
+    allActions = [...new Set(actions)];
 
     // Check for explicit breakdown request
     if (aiResponse.includes("BREAKDOWN_NEEDED")) {
@@ -1466,77 +1519,7 @@ class WebAgent {
       );
       this.logger.ai(`Sub-step response: ${subStepResponse}`);
 
-      // Parse and execute the sub-step action(s)
-      if (
-        subStepResponse.trim() === "ANALYZE" ||
-        subStepResponse.includes("ANALYZE")
-      ) {
-        this.logger.info("Analysis sub-step detected - analyzing current page");
-        this.logger.success(
-          `Sub-step ${i + 1}/${subSteps.length} completed (analysis)`
-        );
-        await this.waitFor(1000);
-        continue; // Move to next sub-step
-      }
-
-      // Check for multiple actions in sub-step response
-      const subActionMatches = [
-        ...subStepResponse.matchAll(
-          /(CLICK|TYPE|FETCH|SCROLL|SELECT|HOVER|PRESS|WAIT|CLEAR):[^\n\r]*/g
-        ),
-      ];
-
-      if (subActionMatches.length > 0) {
-        const subActions = subActionMatches.map((match) => match[0]);
-
-        this.logger.info(
-          `Sub-step ${i + 1}/${subSteps.length} executing ${
-            subActions.length
-          } action(s):`
-        );
-        subActions.forEach((action, index) => {
-          this.logger.info(`    ${index + 1}. ${action}`);
-        });
-
-        // Execute all sub-actions sequentially
-        let allSubActionsSuccessful = true;
-        for (let j = 0; j < subActions.length; j++) {
-          const action = subActions[j];
-
-          const success = await this.performAction(action, this.page);
-          if (success) {
-            this.logger.success(
-              `✅ Sub-action ${j + 1}/${subActions.length} completed`
-            );
-            // Add a small delay between sub-actions
-            if (j < subActions.length - 1) {
-              await this.waitFor(500);
-            }
-          } else {
-            this.logger.error(
-              `❌ Sub-action ${j + 1}/${subActions.length} failed: ${action}`
-            );
-            allSubActionsSuccessful = false;
-            break;
-          }
-        }
-
-        if (allSubActionsSuccessful) {
-          this.logger.success(
-            `Sub-step ${i + 1}/${subSteps.length} completed successfully`
-          );
-          await this.waitFor(1000); // Brief delay between sub-steps
-        } else {
-          this.logger.error(`Sub-step ${i + 1}/${subSteps.length} failed`);
-          return false; // Sub-task failed
-        }
-      } else {
-        this.logger.warning(
-          `No action found for sub-step ${i + 1}/${
-            subSteps.length
-          }, skipping...`
-        );
-      }
+      await this.extractAndPerformActions(subStepResponse);
     }
 
     return true; // All sub-steps completed successfully
