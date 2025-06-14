@@ -24,6 +24,7 @@ class WebAgent {
     this.currentTask = null;
     this.taskSteps = [];
     this.currentStepIndex = 0;
+    this.currentSubStepIndex = 0; // Track current sub-step index
     this.taskCompleted = false;
 
     // Model configuration
@@ -626,7 +627,11 @@ class WebAgent {
         outputTokens: outputTokens,
         totalTokens: totalTokens,
         stepDescription: this.currentTask
-          ? `Step ${this.currentStepIndex + 1}/${this.taskSteps.length}`
+          ? this.currentSubStepIndex > 0
+            ? `Step ${this.currentStepIndex + 1}/${
+                this.taskSteps.length
+              } - Sub-step ${this.currentSubStepIndex + 1}`
+            : `Step ${this.currentStepIndex + 1}/${this.taskSteps.length}`
           : "Single Action",
         timestamp: new Date().toISOString(),
       };
@@ -716,7 +721,11 @@ class WebAgent {
         outputTokens: outputTokens,
         totalTokens: totalTokens,
         stepDescription: this.currentTask
-          ? `Step ${this.currentStepIndex + 1}/${this.taskSteps.length}`
+          ? this.currentSubStepIndex > 0
+            ? `Step ${this.currentStepIndex + 1}/${
+                this.taskSteps.length
+              } - Sub-step ${this.currentSubStepIndex + 1}`
+            : `Step ${this.currentStepIndex + 1}/${this.taskSteps.length}`
           : "Prompt Only Analysis",
         timestamp: new Date().toISOString(),
       };
@@ -845,6 +854,7 @@ class WebAgent {
               this.currentTask = parsedPlan.task;
               this.taskSteps = parsedPlan.steps;
               this.currentStepIndex = 0;
+              this.currentSubStepIndex = 0;
               this.taskCompleted = false;
 
               this.logger.task(`Plan created for: ${this.currentTask}`);
@@ -953,9 +963,9 @@ class WebAgent {
           await this.waitFor(2000);
           await this.highlightLinks();
           await this.takeScreenshot(
-            `step${this.currentStepIndex + 1}-action${
-              i + 1
-            }-${new Date().toISOString()}.jpg`
+            `step${this.currentStepIndex + 1}-substep${
+              this.currentSubStepIndex + 1
+            }-action${i + 1}-${new Date().toISOString()}.jpg`
           );
 
           // Add a small delay between actions if there are more
@@ -1338,6 +1348,7 @@ class WebAgent {
     this.currentTask = null;
     this.taskSteps = [];
     this.currentStepIndex = 0;
+    this.currentSubStepIndex = 0;
     this.taskCompleted = false;
   }
 
@@ -1479,8 +1490,10 @@ class WebAgent {
     );
 
     const parentStepIndex = this.currentStepIndex; // Store parent step index
+    this.currentSubStepIndex = 0; // Reset sub-step index
 
     for (let i = 0; i < subSteps.length; i++) {
+      this.currentSubStepIndex = i; // Update current sub-step index
       const subStep = subSteps[i];
       this.logger.step(`Sub-step ${i + 1}/${subSteps.length}: ${subStep}`);
 
@@ -1489,7 +1502,7 @@ class WebAgent {
       const screenshotPath = await this.takeScreenshot(
         `step${parentStepIndex + 1}-subtask${
           i + 1
-        }-${new Date().toISOString()}.jpg` // no custom filename
+        }-${new Date().toISOString()}.jpg`
       );
 
       // Ask AI to execute this specific sub-step
@@ -1510,6 +1523,8 @@ class WebAgent {
       await this.extractAndPerformActions(subStepResponse);
     }
 
+    // Reset sub-step index after completion
+    this.currentSubStepIndex = 0;
     return true; // All sub-steps completed successfully
   }
 }
