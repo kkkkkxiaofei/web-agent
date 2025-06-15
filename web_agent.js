@@ -538,6 +538,9 @@ class WebAgent {
         this.logger.success(`Analyzed with prompt: ${analysisPrompt}`);
         this.logger.success(`AnalysisResponse: ${analysisResponse}`);
         return true;
+      } else if (action.startsWith("COMPLETE")) {
+        this.logger.success(`Task completed`);
+        return true;
       }
 
       return false;

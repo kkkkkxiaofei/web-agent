@@ -11,6 +11,7 @@ class AnthropicClient {
     this.modelName = modelName;
     this.conversationHistory = [];
     this.fullConversationHistory = [];
+    this.rawMessagesPosted = [];
 
     // Token usage tracking
     this.tokenUsage = {
@@ -55,52 +56,34 @@ class AnthropicClient {
         },
       };
 
-      if (userPrompt) {
-        messages.push({
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: userPrompt,
-            },
-            imageContent,
-          ],
-        });
-      } else {
-        messages.push({
-          role: "user",
-          content: [imageContent],
-        });
-      }
+      const newMessage = userPrompt
+        ? {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: userPrompt,
+              },
+              imageContent,
+            ],
+          }
+        : {
+            role: "user",
+            content: [imageContent],
+          };
 
-      const response = await this.anthropic.messages.create({
+      messages.push(newMessage);
+
+      // Prepare API request data
+      const apiRequest = {
         model: this.modelName,
         max_tokens: 1000,
         temperature: 0.1,
         system: systemMessage,
         messages: messages,
-      });
-
-      // Dump the API request data for debugging
-      const apiRequestData = {
-        timestamp: new Date().toISOString(),
-        model: this.modelName,
-        max_tokens: 1000,
-        temperature: 0.1,
-        system: systemMessage,
-        messages: messages,
-        stepInfo: {
-          currentTask,
-          currentStepIndex,
-          taskSteps: taskSteps.length,
-          currentSubStepIndex,
-        },
       };
 
-      this.logger.dumpFile(
-        JSON.stringify(apiRequestData, null, 2),
-        "anthropic_post.json"
-      );
+      const response = await this.anthropic.messages.create(apiRequest);
 
       const aiResponse = response.content[0].text;
 
@@ -154,9 +137,11 @@ class AnthropicClient {
       if (userMessage) {
         this.conversationHistory.push(userMessage);
         this.fullConversationHistory.push(userMessage);
+        this.rawMessagesPosted.push(newMessage);
       }
       this.conversationHistory.push(assistantMessage);
       this.fullConversationHistory.push(assistantMessage);
+      this.rawMessagesPosted.push(assistantMessage);
 
       // Keep conversation history manageable for API calls (save tokens)
       if (this.conversationHistory.length > 20) {
@@ -167,6 +152,15 @@ class AnthropicClient {
       this.logger.debug(
         `Conversation history: ${this.conversationHistory.length} messages (API), ${this.fullConversationHistory.length} messages (full log)`
       );
+
+      // Dump API request to file
+      this.dumpApiRequest({
+        model: this.modelName,
+        max_tokens: 1000,
+        temperature: 0.1,
+        system: systemMessage,
+        messages: this.rawMessagesPosted,
+      });
 
       return aiResponse;
     } catch (error) {
@@ -188,40 +182,22 @@ class AnthropicClient {
       if (!userPrompt) {
         throw new Error("Prompt is required for prompt-only analysis");
       }
-
-      messages.push({
+      const newMessage = {
         role: "user",
         content: userPrompt,
-      });
+      };
+      messages.push(newMessage);
 
-      const response = await this.anthropic.messages.create({
+      // Prepare API request data
+      const apiRequest = {
         model: this.modelName,
         max_tokens: 1000,
         temperature: 0.1,
         system: systemMessage,
         messages: messages,
-      });
-
-      // Dump the API request data for debugging
-      const apiRequestData = {
-        timestamp: new Date().toISOString(),
-        model: this.modelName,
-        max_tokens: 1000,
-        temperature: 0.1,
-        system: systemMessage,
-        messages: messages,
-        stepInfo: {
-          currentTask,
-          currentStepIndex,
-          taskSteps: taskSteps.length,
-          currentSubStepIndex,
-        },
       };
 
-      this.logger.dumpFile(
-        JSON.stringify(apiRequestData, null, 2),
-        "anthropic_post.json"
-      );
+      const response = await this.anthropic.messages.create(apiRequest);
 
       const aiResponse = response.content[0].text;
 
@@ -272,8 +248,10 @@ class AnthropicClient {
       // Update both histories
       this.conversationHistory.push(userMessage);
       this.fullConversationHistory.push(userMessage);
+      this.rawMessagesPosted.push(newMessage);
       this.conversationHistory.push(assistantMessage);
       this.fullConversationHistory.push(assistantMessage);
+      this.rawMessagesPosted.push(assistantMessage);
 
       // Keep conversation history manageable for API calls (save tokens)
       if (this.conversationHistory.length > 20) {
@@ -285,9 +263,30 @@ class AnthropicClient {
         `Conversation history: ${this.conversationHistory.length} messages (API), ${this.fullConversationHistory.length} messages (full log)`
       );
 
+      // Dump API request to file
+      this.dumpApiRequest({
+        model: this.modelName,
+        max_tokens: 1000,
+        temperature: 0.1,
+        system: systemMessage,
+        messages: this.rawMessagesPosted,
+      });
+
       return aiResponse;
     } catch (error) {
       throw new Error(`Claude prompt-only analysis failed: ${error.message}`);
+    }
+  }
+
+  // Dump API request to file for debugging
+  dumpApiRequest(apiRequest) {
+    try {
+      this.logger.dumpFile(
+        JSON.stringify(apiRequest, null, 2),
+        "anthropic_post.json"
+      );
+    } catch (error) {
+      this.logger.error(`Failed to dump API request: ${error.message}`);
     }
   }
 
