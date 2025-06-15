@@ -1,7 +1,7 @@
 const puppeteer = require("puppeteer");
 const fs = require("fs");
 const readline = require("readline");
-const Anthropic = require("@anthropic-ai/sdk");
+const AnthropicClient = require("./anthropic_client");
 const Logger = require("./logger");
 const Prompts = require("./prompts");
 require("dotenv").config();
@@ -16,28 +16,11 @@ class WebAgent {
   constructor() {
     this.browser = null;
     this.page = null;
-    this.anthropic = new Anthropic({
-      apiKey: process.env.ANTHROPIC_API_KEY,
-    });
-    this.conversationHistory = [];
-    this.fullConversationHistory = []; // Store complete history for logging
     this.currentTask = null;
     this.taskSteps = [];
     this.currentStepIndex = 0;
     this.currentSubStepIndex = 0; // Track current sub-step index
     this.taskCompleted = false;
-
-    // Model configuration
-    this.modelName = "claude-3-5-sonnet-20241022";
-
-    // Token usage tracking
-    this.tokenUsage = {
-      totalInputTokens: 0,
-      totalOutputTokens: 0,
-      stepUsage: [],
-      totalSteps: 0,
-      modelName: this.modelName,
-    };
 
     // Initialize logger
     this.logger = new Logger({
@@ -45,6 +28,8 @@ class WebAgent {
       showInTerminal: true,
     });
 
+    // Initialize Anthropic client
+    this.anthropicClient = new AnthropicClient(this.logger);
     this.systemMessage = Prompts.getSystemMessage();
   }
 
@@ -144,15 +129,6 @@ class WebAgent {
     });
 
     this.logger.success("Web agent initialized successfully");
-  }
-
-  encodeImageToBase64(imagePath) {
-    try {
-      const imageBuffer = fs.readFileSync(imagePath);
-      return imageBuffer.toString("base64");
-    } catch (error) {
-      throw new Error(`Failed to encode image: ${error.message}`);
-    }
   }
 
   async takeScreenshot(filename) {
@@ -550,9 +526,14 @@ class WebAgent {
         }
       } else if (action.startsWith("ANALYZE")) {
         const analysisPrompt = action.replace("ANALYZE:", "").trim();
-        const analysisResponse = await this.analyzeWithClaude(
+        const analysisResponse = await this.anthropicClient.analyzeWithClaude(
           this.screenshotPath,
-          analysisPrompt
+          analysisPrompt,
+          this.systemMessage,
+          this.currentTask,
+          this.currentStepIndex,
+          this.taskSteps,
+          this.currentSubStepIndex
         );
         this.logger.success(`Analyzed with prompt: ${analysisPrompt}`);
         this.logger.success(`AnalysisResponse: ${analysisResponse}`);
@@ -563,210 +544,6 @@ class WebAgent {
     } catch (error) {
       this.logger.error(`Error performing action: ${error.message}`);
       return false;
-    }
-  }
-
-  async analyzeWithClaude(imagePath, userPrompt = null) {
-    try {
-      const base64Image = this.encodeImageToBase64(imagePath);
-
-      // Claude requires separate system parameter and different message format
-      const messages = [...this.conversationHistory];
-
-      const imageContent = {
-        type: "image",
-        source: {
-          type: "base64",
-          media_type: "image/jpeg",
-          data: base64Image,
-        },
-      };
-
-      if (userPrompt) {
-        messages.push({
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: userPrompt,
-            },
-            imageContent,
-          ],
-        });
-      } else {
-        messages.push({
-          role: "user",
-          content: [imageContent],
-        });
-      }
-
-      const response = await this.anthropic.messages.create({
-        model: this.modelName,
-        max_tokens: 1000,
-        temperature: 0.1,
-        system: this.systemMessage,
-        messages: messages,
-      });
-
-      const aiResponse = response.content[0].text;
-
-      // Track token usage
-      const inputTokens = response.usage?.input_tokens || 0;
-      const outputTokens = response.usage?.output_tokens || 0;
-      const totalTokens = inputTokens + outputTokens;
-
-      // Update total token counts
-      this.tokenUsage.totalInputTokens += inputTokens;
-      this.tokenUsage.totalOutputTokens += outputTokens;
-      this.tokenUsage.totalSteps++;
-
-      // Log current step token usage
-      const stepInfo = {
-        step: this.tokenUsage.totalSteps,
-        inputTokens: inputTokens,
-        outputTokens: outputTokens,
-        totalTokens: totalTokens,
-        stepDescription: this.currentTask
-          ? this.currentSubStepIndex > 0
-            ? `Step ${this.currentStepIndex + 1}/${
-                this.taskSteps.length
-              } - Sub-step ${this.currentSubStepIndex + 1}`
-            : `Step ${this.currentStepIndex + 1}/${this.taskSteps.length}`
-          : "Single Action",
-        timestamp: new Date().toISOString(),
-      };
-
-      this.tokenUsage.stepUsage.push(stepInfo);
-
-      // Log token usage for this step
-      this.logger.info(
-        `🔢 Token usage - Step ${this.tokenUsage.totalSteps}: Input: ${inputTokens}, Output: ${outputTokens}, Total: ${totalTokens}`
-      );
-
-      // Update conversation history
-      const userMessage = userPrompt
-        ? {
-            role: "user",
-            content: userPrompt + `[Image provided]: ${imagePath}`,
-          }
-        : null;
-
-      const assistantMessage = {
-        role: "assistant",
-        content: aiResponse,
-      };
-
-      // Update both histories
-      if (userMessage) {
-        this.conversationHistory.push(userMessage);
-        this.fullConversationHistory.push(userMessage);
-      }
-      this.conversationHistory.push(assistantMessage);
-      this.fullConversationHistory.push(assistantMessage);
-
-      // Keep conversation history manageable for API calls (save tokens)
-      if (this.conversationHistory.length > 20) {
-        this.conversationHistory = this.conversationHistory.slice(-20);
-      }
-
-      // Log full conversation count
-      this.logger.debug(
-        `Conversation history: ${this.conversationHistory.length} messages (API), ${this.fullConversationHistory.length} messages (full log)`
-      );
-
-      return aiResponse;
-    } catch (error) {
-      throw new Error(`Claude analysis failed: ${error.message}`);
-    }
-  }
-
-  // New function for prompt-only analysis
-  async analyzeWithPromptOnly(userPrompt) {
-    try {
-      const messages = [...this.conversationHistory];
-
-      if (!userPrompt) {
-        throw new Error("Prompt is required for prompt-only analysis");
-      }
-
-      messages.push({
-        role: "user",
-        content: userPrompt,
-      });
-
-      const response = await this.anthropic.messages.create({
-        model: this.modelName,
-        max_tokens: 1000,
-        temperature: 0.1,
-        system: this.systemMessage,
-        messages: messages,
-      });
-
-      const aiResponse = response.content[0].text;
-
-      // Track token usage
-      const inputTokens = response.usage?.input_tokens || 0;
-      const outputTokens = response.usage?.output_tokens || 0;
-      const totalTokens = inputTokens + outputTokens;
-
-      // Update total token counts
-      this.tokenUsage.totalInputTokens += inputTokens;
-      this.tokenUsage.totalOutputTokens += outputTokens;
-      this.tokenUsage.totalSteps++;
-
-      // Log current step token usage
-      const stepInfo = {
-        step: this.tokenUsage.totalSteps,
-        inputTokens: inputTokens,
-        outputTokens: outputTokens,
-        totalTokens: totalTokens,
-        stepDescription: this.currentTask
-          ? this.currentSubStepIndex > 0
-            ? `Step ${this.currentStepIndex + 1}/${
-                this.taskSteps.length
-              } - Sub-step ${this.currentSubStepIndex + 1}`
-            : `Step ${this.currentStepIndex + 1}/${this.taskSteps.length}`
-          : "Prompt Only Analysis",
-        timestamp: new Date().toISOString(),
-      };
-
-      this.tokenUsage.stepUsage.push(stepInfo);
-
-      // Log token usage for this step
-      this.logger.info(
-        `🔢 Token usage - Step ${this.tokenUsage.totalSteps}: Input: ${inputTokens}, Output: ${outputTokens}, Total: ${totalTokens}`
-      );
-
-      // Update conversation history
-      const userMessage = {
-        role: "user",
-        content: userPrompt,
-      };
-
-      const assistantMessage = {
-        role: "assistant",
-        content: aiResponse,
-      };
-
-      // Update both histories
-      this.conversationHistory.push(userMessage);
-      this.fullConversationHistory.push(userMessage);
-      this.conversationHistory.push(assistantMessage);
-      this.fullConversationHistory.push(assistantMessage);
-
-      // Keep conversation history manageable for API calls (save tokens)
-      if (this.conversationHistory.length > 20) {
-        this.conversationHistory = this.conversationHistory.slice(-20);
-      }
-
-      // Log full conversation count
-      this.logger.debug(
-        `Conversation history: ${this.conversationHistory.length} messages (API), ${this.fullConversationHistory.length} messages (full log)`
-      );
-
-      return aiResponse;
-    } catch (error) {
-      throw new Error(`Claude prompt-only analysis failed: ${error.message}`);
     }
   }
 
@@ -821,13 +598,10 @@ class WebAgent {
             `Highlighted ${elements.length} interactive elements`
           );
 
-          // Take screenshot
-          const screenshotPath = await this.takeScreenshot("init_page.jpg");
-
           // Reset token tracking for this interaction
           const previousTotalTokens =
-            this.tokenUsage.totalInputTokens +
-            this.tokenUsage.totalOutputTokens;
+            this.anthropicClient.getTokenUsage().totalInputTokens +
+            this.anthropicClient.getTokenUsage().totalOutputTokens;
 
           // Detect if this is a complex task vs simple command
           const isComplexTask = this.isComplexTask(input);
@@ -844,7 +618,14 @@ class WebAgent {
             this.logger.ai(
               `Analyzing initial page with the following prompt: \n${planningPrompt}`
             );
-            aiResponse = await this.analyzeWithPromptOnly(planningPrompt);
+            aiResponse = await this.anthropicClient.analyzeWithPromptOnly(
+              planningPrompt,
+              this.systemMessage,
+              this.currentTask,
+              this.currentStepIndex,
+              this.taskSteps,
+              this.currentSubStepIndex
+            );
 
             this.logger.ai(`AI Response: ${aiResponse}`);
 
@@ -870,38 +651,52 @@ class WebAgent {
                 "Could not parse the plan. Falling back to single action mode."
               );
               // Fall back to single action mode
-              aiResponse = await this.analyzeWithPromptOnly(input);
+              aiResponse = await this.anthropicClient.analyzeWithPromptOnly(
+                input,
+                this.systemMessage,
+                this.currentTask,
+                this.currentStepIndex,
+                this.taskSteps,
+                this.currentSubStepIndex
+              );
               this.logger.ai(`AI Response: ${aiResponse}`);
               await this.extractAndPerformActions(aiResponse);
 
               // Display token usage for fallback single action
               const currentTotalTokens =
-                this.tokenUsage.totalInputTokens +
-                this.tokenUsage.totalOutputTokens;
+                this.anthropicClient.getTokenUsage().totalInputTokens +
+                this.anthropicClient.getTokenUsage().totalOutputTokens;
               if (currentTotalTokens > previousTotalTokens) {
-                this.displayTokenUsageSummary();
+                this.anthropicClient.displayTokenUsageSummary();
               }
             }
           } else {
             // Handle simple single action
             this.logger.info("Handling as single action...");
-            aiResponse = await this.analyzeWithPromptOnly(input);
+            aiResponse = await this.anthropicClient.analyzeWithPromptOnly(
+              input,
+              this.systemMessage,
+              this.currentTask,
+              this.currentStepIndex,
+              this.taskSteps,
+              this.currentSubStepIndex
+            );
             this.logger.ai(`AI Response: ${aiResponse}`);
             await this.extractAndPerformActions(aiResponse);
 
             // Display token usage for single action
             const currentTotalTokens =
-              this.tokenUsage.totalInputTokens +
-              this.tokenUsage.totalOutputTokens;
+              this.anthropicClient.getTokenUsage().totalInputTokens +
+              this.anthropicClient.getTokenUsage().totalOutputTokens;
             if (currentTotalTokens > previousTotalTokens) {
-              this.displayTokenUsageSummary();
+              this.anthropicClient.displayTokenUsageSummary();
             }
           }
         } catch (error) {
           this.logger.error(`Error: ${error.message}`);
 
           // Still display token usage even if there was an error
-          this.displayTokenUsageSummary();
+          this.anthropicClient.displayTokenUsageSummary();
         }
 
         askQuestion(); // Continue the conversation
@@ -986,9 +781,9 @@ class WebAgent {
 
   async cleanup() {
     // Display final token usage summary
-    if (this.tokenUsage.totalSteps > 0) {
+    if (this.anthropicClient.getTokenUsage().totalSteps > 0) {
       this.logger.info("Session ending - displaying final token usage:");
-      this.displayTokenUsageSummary();
+      this.anthropicClient.displayTokenUsageSummary();
     }
 
     if (this.browser) {
@@ -1012,67 +807,6 @@ class WebAgent {
       this.logger.debug(`Wait method failed, using fallback: ${error.message}`);
       await new Promise((resolve) => setTimeout(resolve, ms));
     }
-  }
-
-  // Display token usage summary
-  displayTokenUsageSummary() {
-    const totalTokens =
-      this.tokenUsage.totalInputTokens + this.tokenUsage.totalOutputTokens;
-
-    this.logger.separator("📊 TOKEN USAGE SUMMARY");
-    this.logger.info(`Model: ${this.tokenUsage.modelName}`);
-    this.logger.info(`Total API Calls: ${this.tokenUsage.totalSteps}`);
-    this.logger.info(
-      `Total Input Tokens: ${this.tokenUsage.totalInputTokens.toLocaleString()}`
-    );
-    this.logger.info(
-      `Total Output Tokens: ${this.tokenUsage.totalOutputTokens.toLocaleString()}`
-    );
-    this.logger.info(`Total Tokens Used: ${totalTokens.toLocaleString()}`);
-
-    // Estimate cost (Claude 3.5 Sonnet pricing as of last update)
-    const inputCost = (this.tokenUsage.totalInputTokens / 1000000) * 3.0; // $3 per million input tokens
-    const outputCost = (this.tokenUsage.totalOutputTokens / 1000000) * 15.0; // $15 per million output tokens
-    const totalCost = inputCost + outputCost;
-
-    this.logger.info(
-      `Estimated Cost: $${totalCost.toFixed(4)} (Input: $${inputCost.toFixed(
-        4
-      )}, Output: $${outputCost.toFixed(4)})`
-    );
-
-    // Show per-step breakdown if more than 1 step
-    if (this.tokenUsage.stepUsage.length > 1) {
-      this.logger.info("\n📋 Per-Step Breakdown:");
-      this.tokenUsage.stepUsage.forEach((step, index) => {
-        this.logger.info(
-          `  ${index + 1}. ${step.stepDescription}: ${
-            step.totalTokens
-          } tokens (${step.inputTokens} in, ${step.outputTokens} out)`
-        );
-      });
-    }
-
-    // Save token usage to file
-    const tokenSummary = {
-      summary: {
-        modelName: this.tokenUsage.modelName,
-        totalSteps: this.tokenUsage.totalSteps,
-        totalInputTokens: this.tokenUsage.totalInputTokens,
-        totalOutputTokens: this.tokenUsage.totalOutputTokens,
-        totalTokens: totalTokens,
-        estimatedCost: totalCost,
-        taskCompleted: this.taskCompleted,
-        currentTask: this.currentTask,
-      },
-      stepBreakdown: this.tokenUsage.stepUsage,
-    };
-
-    this.logger.dumpFile(
-      JSON.stringify(tokenSummary, null, 2),
-      "token-usage-summary.json"
-    );
-    this.logger.separator();
   }
 
   // Extract and parse task plan from AI response
@@ -1132,7 +866,15 @@ class WebAgent {
         this.taskSteps.length
       }, Analyzing the page for the current step with the following prompt: \n${stepPrompt}`
     );
-    const aiResponse = await this.analyzeWithClaude(screenshotPath, stepPrompt);
+    const aiResponse = await this.anthropicClient.analyzeWithClaude(
+      screenshotPath,
+      stepPrompt,
+      this.systemMessage,
+      this.currentTask,
+      this.currentStepIndex,
+      this.taskSteps,
+      this.currentSubStepIndex
+    );
     this.logger.ai(`AI Response: ${aiResponse}`);
 
     // Save both JSON and readable format using FULL conversation history for logging
@@ -1141,7 +883,7 @@ class WebAgent {
         role: "system",
         content: this.systemMessage,
       },
-      ...this.fullConversationHistory,
+      ...this.anthropicClient.getFullConversationHistory(),
     ];
 
     // Save JSON format (complete conversation history)
@@ -1167,7 +909,7 @@ class WebAgent {
         role: "system",
         content: this.systemMessage,
       },
-      ...this.conversationHistory,
+      ...this.anthropicClient.getConversationHistory(),
     ];
 
     this.logger.dumpFile(
@@ -1292,9 +1034,14 @@ class WebAgent {
             this.logger.ai(
               `Analyzing the page for the final step with the following prompt: \n${finalPrompt}`
             );
-            const finalResponse = await this.analyzeWithClaude(
+            const finalResponse = await this.anthropicClient.analyzeWithClaude(
               finalScreenshot,
-              finalPrompt
+              finalPrompt,
+              this.systemMessage,
+              this.currentTask,
+              this.currentStepIndex,
+              this.taskSteps,
+              this.currentSubStepIndex
             );
             this.logger.success(`FINAL RESULTS:\n${finalResponse}`);
 
@@ -1342,7 +1089,7 @@ class WebAgent {
     }
 
     // Display token usage summary before resetting task state
-    this.displayTokenUsageSummary();
+    this.anthropicClient.displayTokenUsageSummary();
 
     // Reset task state
     this.currentTask = null;
@@ -1367,9 +1114,14 @@ class WebAgent {
     this.logger.ai(
       `Verifying step completion with prompt: \n${verificationPrompt}`
     );
-    const verificationResponse = await this.analyzeWithClaude(
+    const verificationResponse = await this.anthropicClient.analyzeWithClaude(
       verificationScreenshot,
-      verificationPrompt
+      verificationPrompt,
+      this.systemMessage,
+      this.currentTask,
+      this.currentStepIndex,
+      this.taskSteps,
+      this.currentSubStepIndex
     );
     this.logger.ai(`Verification response: ${verificationResponse}`);
 
@@ -1393,9 +1145,14 @@ class WebAgent {
     this.logger.ai(
       `Creating sub-plan for complex step with prompt: \n${subPlanPrompt}`
     );
-    const subPlanResponse = await this.analyzeWithClaude(
+    const subPlanResponse = await this.anthropicClient.analyzeWithClaude(
       screenshotPath,
-      subPlanPrompt
+      subPlanPrompt,
+      this.systemMessage,
+      this.currentTask,
+      this.currentStepIndex,
+      this.taskSteps,
+      this.currentSubStepIndex
     );
     this.logger.ai(`Sub-plan response: ${subPlanResponse}`);
 
@@ -1514,9 +1271,14 @@ class WebAgent {
       );
 
       this.logger.ai(`Analyzing sub-step with prompt: \n${subStepPrompt}`);
-      const subStepResponse = await this.analyzeWithClaude(
+      const subStepResponse = await this.anthropicClient.analyzeWithClaude(
         screenshotPath,
-        subStepPrompt
+        subStepPrompt,
+        this.systemMessage,
+        this.currentTask,
+        this.currentStepIndex,
+        this.taskSteps,
+        this.currentSubStepIndex
       );
       this.logger.ai(`Sub-step response: ${subStepResponse}`);
 
