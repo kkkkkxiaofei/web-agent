@@ -1073,11 +1073,15 @@ class WebAgent {
     this.logger.info(`Steps to execute: ${this.taskSteps.length}`);
 
     let continueExecution = true;
-    let maxSteps = 20; // Safety limit
-    let stepCount = 0;
+    let maxExecutionCount = this.taskSteps.length * 2; // Allow each step to have one retry
+    let stepExecutionCount = 0;
 
-    while (continueExecution && !this.taskCompleted && stepCount < maxSteps) {
-      stepCount++;
+    while (
+      continueExecution &&
+      !this.taskCompleted &&
+      stepExecutionCount < maxExecutionCount
+    ) {
+      stepExecutionCount++;
       continueExecution = await this.executeTaskStep();
 
       if (continueExecution) {
@@ -1085,7 +1089,7 @@ class WebAgent {
       }
     }
 
-    if (stepCount >= maxSteps) {
+    if (stepExecutionCount >= maxExecutionCount) {
       this.logger.warning(
         "Reached maximum step limit. Task execution stopped."
       );
