@@ -21,6 +21,7 @@ class WebAgent {
     this.currentStepIndex = 0;
     this.currentSubStepIndex = 0; // Track current sub-step index
     this.taskCompleted = false;
+    this.currentScreenshotPath = null;
 
     // Initialize logger
     this.logger = new Logger({
@@ -526,8 +527,14 @@ class WebAgent {
         }
       } else if (action.startsWith("ANALYZE")) {
         const analysisPrompt = action.replace("ANALYZE:", "").trim();
+        const screenshotPath = await this.takeScreenshot(
+          `step${
+            this.currentStepIndex + 1
+          }-analyze-${new Date().toISOString()}.jpg`
+        );
+
         const analysisResponse = await this.anthropicClient.analyzeWithClaude(
-          this.screenshotPath,
+          screenshotPath,
           analysisPrompt,
           this.systemMessage,
           this.currentTask,
