@@ -1,6 +1,8 @@
-const Anthropic = require("@anthropic-ai/sdk");
-const fs = require("fs");
-require("dotenv").config();
+import Anthropic from "@anthropic-ai/sdk";
+import fs from "fs";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 class AnthropicClient {
   constructor(logger, modelName = "claude-3-5-sonnet-20241022") {
@@ -370,4 +372,4 @@ class AnthropicClient {
   }
 }
 
-module.exports = AnthropicClient;
+export default AnthropicClient;

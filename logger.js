@@ -1,5 +1,5 @@
-const fs = require("fs");
-const path = require("path");
+import fs from "fs";
+import path from "path";
 
 class Logger {
   constructor(options = {}) {
@@ -62,7 +62,16 @@ class Logger {
   ensureLogDirectory() {
     const logDir = path.dirname(this.logFile);
     if (logDir !== "." && !fs.existsSync(logDir)) {
-      fs.mkdirSync(logDir, { recursive: true });
+      try {
+        fs.mkdirSync(logDir, { recursive: true });
+      } catch (error) {
+        // If we can't create the log directory, fall back to current directory
+        console.error(
+          `Warning: Could not create log directory '${logDir}': ${error.message}`
+        );
+        console.error("Falling back to current directory for logging");
+        this.logFile = path.basename(this.logFile);
+      }
     }
   }
 
@@ -111,8 +120,29 @@ class Logger {
 
   dumpFile(content, filename) {
     const logDir = path.dirname(this.logFile);
-    const filePath = `${logDir}/${filename}`;
-    fs.writeFileSync(filePath, content, "utf8");
+    let filePath = `${logDir}/${filename}`;
+
+    // If logDir is current directory, just use filename
+    if (logDir === ".") {
+      filePath = filename;
+    }
+
+    try {
+      fs.writeFileSync(filePath, content, "utf8");
+    } catch (error) {
+      // Fallback to current directory
+      console.error(
+        `Warning: Could not write to '${filePath}': ${error.message}`
+      );
+      try {
+        fs.writeFileSync(filename, content, "utf8");
+        console.error(`File saved to current directory: ${filename}`);
+      } catch (fallbackError) {
+        console.error(
+          `Failed to write file '${filename}': ${fallbackError.message}`
+        );
+      }
+    }
   }
 
   log(level, message, data = null, options = {}) {
@@ -207,4 +237,4 @@ class Logger {
   }
 }
 
-module.exports = Logger;
+export default Logger;
