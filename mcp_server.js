@@ -22,11 +22,21 @@ class WebAutomationMCPServer {
     this.browser = null;
     this.page = null;
 
-    // Ensure logs directory exists before creating logger
-    this.ensureLogsDirectory();
+    // Try to setup logging, but fall back gracefully if file system is read-only
+    let logFile = null;
+    try {
+      this.ensureLogsDirectory();
+      logFile = `logs/mcp-server-${new Date().toISOString()}.log`;
+    } catch (error) {
+      // If we can't create logs directory, disable file logging
+      console.error(
+        "Warning: Could not setup file logging, continuing without log files:",
+        error.message
+      );
+    }
 
     this.logger = new Logger({
-      logFile: `logs/mcp-server-${new Date().toISOString()}.log`,
+      logFile: logFile, // Will be null if file logging failed to setup
       showInTerminal: false, // Disable terminal output for MCP server to avoid interfering with stdio
     });
     this.anthropicClient = new AnthropicClient(this.logger);
@@ -168,31 +178,25 @@ class WebAutomationMCPServer {
 
   async takeScreenshot(filename) {
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const filePath = `logs/mcp-${timestamp}-${filename}`;
+    let filePath = `logs/mcp-${timestamp}-${filename}`;
 
-    // Ensure logs directory exists
+    // Try to ensure logs directory exists, but fallback if file system is read-only
     try {
       if (!fs.existsSync("logs")) {
         fs.mkdirSync("logs", { recursive: true });
       }
     } catch (error) {
       this.logger.error(`Could not create logs directory: ${error.message}`);
-      // Fallback to current directory
-      const fallbackPath = `mcp-${timestamp}-${filename}`;
-      this.logger.info(`Using fallback path: ${fallbackPath}`);
-
+      // Fallback to temp directory or current directory
+      const os = await import("os");
       try {
-        await this.page.screenshot({
-          path: fallbackPath,
-          fullPage: false,
-          quality: 90,
-        });
-        this.logger.debug(`Screenshot saved as ${fallbackPath}`);
-        return fallbackPath;
-      } catch (screenshotError) {
-        throw new Error(
-          `Failed to take screenshot: ${screenshotError.message}`
-        );
+        const tempDir = os.tmpdir();
+        filePath = `${tempDir}/mcp-${timestamp}-${filename}`;
+        this.logger.info(`Using temp directory path: ${filePath}`);
+      } catch (tempError) {
+        // Final fallback to current directory
+        filePath = `mcp-${timestamp}-${filename}`;
+        this.logger.info(`Using current directory fallback path: ${filePath}`);
       }
     }
 
@@ -370,6 +374,281 @@ class WebAutomationMCPServer {
     });
 
     return elementsInfo;
+  }
+
+  async summarizePageHierarchy() {
+    try {
+      const pageTitle = await this.page.title();
+      const currentUrl = this.page.url();
+
+      // Get the page hierarchy structure with optimized nesting
+      const hierarchyData = await this.page.evaluate(() => {
+        const getAllTextContent = (el) => {
+          // Get all text content from element and its descendants, but not from interactive elements
+          const interactiveElements = new Set([
+            "input",
+            "button",
+            "select",
+            "textarea",
+            "a",
+          ]);
+          let allText = [];
+
+          const collectText = (node) => {
+            if (node.nodeType === Node.TEXT_NODE) {
+              const text = node.textContent.trim();
+              if (text) allText.push(text);
+            } else if (node.nodeType === Node.ELEMENT_NODE) {
+              // Don't collect text from interactive elements as they'll be shown separately
+              if (!interactiveElements.has(node.tagName.toLowerCase())) {
+                for (const child of node.childNodes) {
+                  collectText(child);
+                }
+              }
+            }
+          };
+
+          collectText(el);
+          return allText.join(" ").trim();
+        };
+
+        const isSemanticElement = (tagName) => {
+          const semanticTags = [
+            "header",
+            "nav",
+            "main",
+            "article",
+            "section",
+            "aside",
+            "footer",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "h6",
+            "p",
+            "ul",
+            "ol",
+            "li",
+            "form",
+            "table",
+            "thead",
+            "tbody",
+            "tr",
+            "td",
+            "th",
+            "img",
+            "video",
+            "audio",
+            "canvas",
+            "svg",
+            "input",
+            "button",
+            "select",
+            "textarea",
+            "label",
+            "fieldset",
+            "blockquote",
+            "pre",
+            "code",
+            "time",
+            "address",
+            "details",
+            "summary",
+            "dialog",
+          ];
+          return semanticTags.includes(tagName);
+        };
+
+        const hasInteractiveElement = (el) => {
+          return el.getAttribute("gbt_link_text") !== null;
+        };
+
+        const shouldCollapse = (el) => {
+          const tagName = el.tagName.toLowerCase();
+          // Don't collapse semantic elements or interactive elements
+          if (isSemanticElement(tagName) || hasInteractiveElement(el)) {
+            return false;
+          }
+
+          // Check if this is a generic container (div, span) with only one child that's also generic
+          if (
+            (tagName === "div" || tagName === "span") &&
+            el.children.length === 1
+          ) {
+            const child = el.children[0];
+            const childTagName = child.tagName.toLowerCase();
+
+            // If child is also a generic container, consider collapsing
+            if (
+              (childTagName === "div" || childTagName === "span") &&
+              !isSemanticElement(childTagName) &&
+              !hasInteractiveElement(child)
+            ) {
+              return true;
+            }
+          }
+
+          return false;
+        };
+
+        const getElementInfo = (el, depth = 0) => {
+          const tagName = el.tagName.toLowerCase();
+          const elementId = el.getAttribute("gbt_link_text");
+          const role = el.getAttribute("role");
+          const ariaLabel = el.getAttribute("aria-label");
+          const title = el.title;
+          const placeholder = el.placeholder;
+          const value = el.value;
+          const href = el.href;
+          const alt = el.alt;
+
+          // Check if we should collapse this element and its descendants
+          let actualElement = el;
+          let collapsedText = "";
+
+          while (
+            shouldCollapse(actualElement) &&
+            actualElement.children.length === 1
+          ) {
+            // Collect any text content from the collapsed element
+            const elementText = getAllTextContent(actualElement);
+            if (elementText && !collapsedText.includes(elementText)) {
+              collapsedText = collapsedText
+                ? `${collapsedText} ${elementText}`
+                : elementText;
+            }
+            actualElement = actualElement.children[0];
+          }
+
+          const actualTagName = actualElement.tagName.toLowerCase();
+          const actualElementId =
+            actualElement.getAttribute("gbt_link_text") || elementId;
+          const actualRole = actualElement.getAttribute("role") || role;
+
+          let elementInfo = {
+            tagName: actualRole || actualTagName,
+            ref: actualElementId,
+            text: collapsedText || getAllTextContent(actualElement),
+            attributes: {},
+            children: [],
+          };
+
+          // Add special attributes from the actual element
+          if (
+            actualTagName === "h1" ||
+            actualTagName === "h2" ||
+            actualTagName === "h3" ||
+            actualTagName === "h4" ||
+            actualTagName === "h5" ||
+            actualTagName === "h6"
+          ) {
+            elementInfo.attributes.level = parseInt(actualTagName.charAt(1));
+          }
+
+          const actualAriaLabel =
+            actualElement.getAttribute("aria-label") || ariaLabel;
+          const actualTitle = actualElement.title || title;
+          const actualPlaceholder = actualElement.placeholder || placeholder;
+          const actualValue = actualElement.value || value;
+          const actualHref = actualElement.href || href;
+          const actualAlt = actualElement.alt || alt;
+
+          if (actualAriaLabel)
+            elementInfo.attributes.ariaLabel = actualAriaLabel;
+          if (actualTitle) elementInfo.attributes.title = actualTitle;
+          if (actualPlaceholder)
+            elementInfo.attributes.placeholder = actualPlaceholder;
+          if (actualValue) elementInfo.attributes.value = actualValue;
+          if (actualHref) elementInfo.attributes.href = actualHref;
+          if (actualAlt) elementInfo.attributes.alt = actualAlt;
+
+          // Process children only if depth is reasonable
+          if (depth < 8) {
+            for (const child of actualElement.children) {
+              const styles = window.getComputedStyle(child);
+              if (styles.display !== "none" && styles.visibility !== "hidden") {
+                const childInfo = getElementInfo(child, depth + 1);
+                // Only add child if it has meaningful content
+                if (
+                  childInfo.ref ||
+                  childInfo.text ||
+                  childInfo.children.length > 0 ||
+                  isSemanticElement(childInfo.tagName)
+                ) {
+                  elementInfo.children.push(childInfo);
+                }
+              }
+            }
+          }
+
+          return elementInfo;
+        };
+
+        // Start from body or document element
+        const rootElement = document.body || document.documentElement;
+        return getElementInfo(rootElement);
+      });
+
+      // Format the hierarchy as YAML-like structure
+      const formatHierarchy = (element, indent = 0) => {
+        const spaces = "  ".repeat(indent);
+        let output = "";
+
+        // Build the element line
+        let elementLine = `${spaces}- ${element.tagName}`;
+
+        // Add text content if available (limit length for readability)
+        if (element.text && element.text.trim()) {
+          let text = element.text
+            .replace(/"/g, '\\"')
+            .replace(/\s+/g, " ")
+            .trim();
+          if (text.length > 100) {
+            text = text.substring(0, 100) + "...";
+          }
+          elementLine += ` "${text}"`;
+        }
+
+        // Add special attributes
+        if (element.attributes.level) {
+          elementLine += ` [level=${element.attributes.level}]`;
+        }
+
+        // Add reference if available
+        if (element.ref) {
+          elementLine += ` [ref=${element.ref}]`;
+        }
+
+        // Add other attributes
+        if (element.attributes.placeholder) {
+          elementLine += `: "${element.attributes.placeholder}"`;
+        } else if (element.attributes.value) {
+          elementLine += `: "${element.attributes.value}"`;
+        }
+
+        output += elementLine + "\n";
+
+        // Process children
+        for (const child of element.children) {
+          output += formatHierarchy(child, indent + 1);
+        }
+
+        return output;
+      };
+
+      const hierarchyYaml = formatHierarchy(hierarchyData);
+
+      return `- Page URL: ${currentUrl}
+- Page Title: ${pageTitle}
+- Page Snapshot
+\`\`\`yaml
+${hierarchyYaml}\`\`\``;
+    } catch (error) {
+      this.logger.error(`Failed to summarize page hierarchy: ${error.message}`);
+      return "- Page hierarchy summary unavailable due to error";
+    }
   }
 
   async performAction(action) {
@@ -876,24 +1155,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
         },
       },
-      {
-        name: "web_highlight_elements",
-        description:
-          "Highlight all interactive elements on the current page with numbered red overlays. Use this to refresh element highlighting after page changes or to see what elements are available for interaction.",
-        inputSchema: {
-          type: "object",
-          properties: {},
-        },
-      },
-      {
-        name: "web_refresh_elements",
-        description:
-          "Get updated detailed information about all currently highlighted interactive elements without navigating. Useful after page changes, form submissions, or dynamic content updates to see the current state of elements.",
-        inputSchema: {
-          type: "object",
-          properties: {},
-        },
-      },
+
       {
         name: "web_analyze",
         description:
@@ -925,37 +1187,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "web_navigate":
         const result = await automation.performAction(`FETCH:${args.url}`);
 
-        // Format the enhanced response with element information
-        let navResponseText = `${result.message}\n\nPage Information:\n`;
-        navResponseText += `- Title: ${result.pageInfo.title}\n`;
-        navResponseText += `- URL: ${result.pageInfo.url}\n`;
-        navResponseText += `- Interactive Elements Found: ${result.pageInfo.elementCount}\n\n`;
-
-        if (result.elements && result.elements.length > 0) {
-          navResponseText += `Available Interactive Elements:\n`;
-          result.elements.forEach((el) => {
-            navResponseText += `\n[${el.id}] ${el.tagName.toUpperCase()}`;
-            if (el.type) navResponseText += ` (${el.type})`;
-            if (el.textContent) navResponseText += ` - "${el.textContent}"`;
-            if (el.placeholder)
-              navResponseText += ` - Placeholder: "${el.placeholder}"`;
-            if (el.href) navResponseText += ` - Link: ${el.href}`;
-            if (el.value) navResponseText += ` - Value: "${el.value}"`;
-            if (el.options && el.options.length > 0) {
-              navResponseText += ` - Options: ${el.options
-                .map((opt) => opt.text)
-                .join(", ")}`;
-            }
-            if (el.disabled) navResponseText += ` - DISABLED`;
-            if (el.required) navResponseText += ` - REQUIRED`;
-          });
-        }
+        // Get page hierarchy summary
+        const navHierarchy = await automation.summarizePageHierarchy();
 
         return {
           content: [
             {
               type: "text",
-              text: navResponseText,
+              text: `${result.message}\n\n${navHierarchy}`,
             },
           ],
         };
@@ -964,11 +1203,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const clickResult = await automation.performAction(
           `CLICK:${args.element_id}`
         );
+        const clickHierarchy = await automation.summarizePageHierarchy();
         return {
           content: [
             {
               type: "text",
-              text: clickResult.message,
+              text: `${clickResult.message}\n\n${clickHierarchy}`,
             },
           ],
         };
@@ -977,11 +1217,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const typeResult = await automation.performAction(
           `TYPE:${args.element_id}:${args.text}`
         );
+        const typeHierarchy = await automation.summarizePageHierarchy();
         return {
           content: [
             {
               type: "text",
-              text: typeResult.message,
+              text: `${typeResult.message}\n\n${typeHierarchy}`,
             },
           ],
         };
@@ -991,11 +1232,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ? `SCROLL:${args.direction}:${args.amount}`
           : `SCROLL:${args.direction}`;
         const scrollResult = await automation.performAction(scrollAction);
+        const scrollHierarchy = await automation.summarizePageHierarchy();
         return {
           content: [
             {
               type: "text",
-              text: scrollResult.message,
+              text: `${scrollResult.message}\n\n${scrollHierarchy}`,
             },
           ],
         };
@@ -1004,11 +1246,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const selectResult = await automation.performAction(
           `SELECT:${args.element_id}:${args.option}`
         );
+        const selectHierarchy = await automation.summarizePageHierarchy();
         return {
           content: [
             {
               type: "text",
-              text: selectResult.message,
+              text: `${selectResult.message}\n\n${selectHierarchy}`,
             },
           ],
         };
@@ -1017,11 +1260,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const hoverResult = await automation.performAction(
           `HOVER:${args.element_id}`
         );
+        const hoverHierarchy = await automation.summarizePageHierarchy();
         return {
           content: [
             {
               type: "text",
-              text: hoverResult.message,
+              text: `${hoverResult.message}\n\n${hoverHierarchy}`,
             },
           ],
         };
@@ -1030,11 +1274,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const pressResult = await automation.performAction(
           `PRESS:${args.keys}`
         );
+        const pressHierarchy = await automation.summarizePageHierarchy();
         return {
           content: [
             {
               type: "text",
-              text: pressResult.message,
+              text: `${pressResult.message}\n\n${pressHierarchy}`,
             },
           ],
         };
@@ -1056,11 +1301,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const clearResult = await automation.performAction(
           `CLEAR:${args.element_id}`
         );
+        const clearHierarchy = await automation.summarizePageHierarchy();
         return {
           content: [
             {
               type: "text",
-              text: clearResult.message,
+              text: `${clearResult.message}\n\n${clearHierarchy}`,
             },
           ],
         };
@@ -1073,60 +1319,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               type: "text",
               text: `Screenshot saved to: ${screenshotPath}`,
-            },
-          ],
-        };
-
-      case "web_highlight_elements":
-        const elementCount = await automation.highlightLinks();
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Highlighted ${elementCount} interactive elements`,
-            },
-          ],
-        };
-
-      case "web_refresh_elements":
-        const elementsInfo = await automation.collectElementsInfo();
-
-        // Get page title and URL for context
-        const pageTitle = await automation.page.title();
-        const currentUrl = automation.page.url();
-
-        let refreshResponseText = `Page Information:\n`;
-        refreshResponseText += `- Title: ${pageTitle}\n`;
-        refreshResponseText += `- URL: ${currentUrl}\n`;
-        refreshResponseText += `- Interactive Elements Found: ${elementsInfo.length}\n\n`;
-
-        if (elementsInfo && elementsInfo.length > 0) {
-          refreshResponseText += `Available Interactive Elements:\n`;
-          elementsInfo.forEach((el) => {
-            refreshResponseText += `\n[${el.id}] ${el.tagName.toUpperCase()}`;
-            if (el.type) refreshResponseText += ` (${el.type})`;
-            if (el.textContent) refreshResponseText += ` - "${el.textContent}"`;
-            if (el.placeholder)
-              refreshResponseText += ` - Placeholder: "${el.placeholder}"`;
-            if (el.href) refreshResponseText += ` - Link: ${el.href}`;
-            if (el.value) refreshResponseText += ` - Value: "${el.value}"`;
-            if (el.options && el.options.length > 0) {
-              refreshResponseText += ` - Options: ${el.options
-                .map((opt) => opt.text)
-                .join(", ")}`;
-            }
-            if (el.disabled) refreshResponseText += ` - DISABLED`;
-            if (el.required) refreshResponseText += ` - REQUIRED`;
-          });
-        } else {
-          refreshResponseText += `No interactive elements found. You may need to run web_highlight_elements first.`;
-        }
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: refreshResponseText,
             },
           ],
         };
