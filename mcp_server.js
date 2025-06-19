@@ -242,34 +242,107 @@ class WebAutomationMCPServer {
         "[onclick]",
         '[role="button"]',
         '[role="link"]',
+        '[role="textbox"]',
+        '[role="checkbox"]',
+        '[role="radio"]',
+        '[role="switch"]',
+        '[role="combobox"]',
+        '[role="listbox"]',
+        '[role="menuitem"]',
+        '[role="menuitemcheckbox"]',
+        '[role="menuitemradio"]',
+        '[role="option"]',
+        '[role="searchbox"]',
+        '[role="spinbutton"]',
+        '[role="slider"]',
+        '[role="tab"]',
+        '[contenteditable="true"]',
         "[tabindex]",
       ];
 
-      const interactiveElements = [];
+      // First pass: collect all directly interactive elements
+      const interactiveElements = new Set();
       selectors.forEach((selector) => {
-        const elements = document.querySelectorAll(selector);
-        elements.forEach((el) => {
-          if (!interactiveElements.includes(el)) {
-            interactiveElements.push(el);
-          }
+        document.querySelectorAll(selector).forEach((el) => {
+          interactiveElements.add(el);
         });
       });
 
-      // Filter visible and in-viewport elements
-      const visibleElements = interactiveElements.filter((el) => {
+      // Second pass: collect parent containers of interactive elements
+      const containers = new Set();
+      interactiveElements.forEach((el) => {
+        let parent = el.parentElement;
+        while (parent && parent !== document.body) {
+          if (
+            parent.tagName.toLowerCase() === "form" ||
+            parent.tagName.toLowerCase() === "fieldset" ||
+            parent.getAttribute("role") === "group" ||
+            parent.getAttribute("role") === "form" ||
+            parent.getAttribute("role") === "toolbar" ||
+            parent.getAttribute("role") === "menu" ||
+            parent.getAttribute("role") === "menubar" ||
+            parent.getAttribute("role") === "tablist" ||
+            parent.getAttribute("role") === "listbox" ||
+            parent.getAttribute("role") === "radiogroup"
+          ) {
+            containers.add(parent);
+          }
+          parent = parent.parentElement;
+        }
+      });
+
+      // Combine both sets and convert to array
+      const allElements = [...interactiveElements, ...containers];
+
+      // Helper function to check if an element is visible
+      const isVisible = (el) => {
+        if (!el) return false;
+
         const rect = el.getBoundingClientRect();
         const style = window.getComputedStyle(el);
 
-        return (
-          rect.width > 0 &&
-          rect.height > 0 &&
-          style.visibility !== "hidden" &&
-          style.display !== "none" &&
-          rect.top < window.innerHeight &&
-          rect.bottom > 0 &&
-          rect.left < window.innerWidth &&
-          rect.right > 0
-        );
+        // Basic visibility checks
+        if (
+          style.visibility === "hidden" ||
+          style.display === "none" ||
+          style.opacity === "0" ||
+          rect.width === 0 ||
+          rect.height === 0
+        ) {
+          return false;
+        }
+
+        // Check if element is in viewport
+        if (
+          rect.top >= window.innerHeight ||
+          rect.bottom <= 0 ||
+          rect.left >= window.innerWidth ||
+          rect.right <= 0
+        ) {
+          return false;
+        }
+
+        // Check if element is covered by other elements
+        const center = {
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2,
+        };
+
+        const elementAtPoint = document.elementFromPoint(center.x, center.y);
+        return el === elementAtPoint || el.contains(elementAtPoint);
+      };
+
+      // Filter visible elements and their containers
+      const visibleElements = allElements.filter((el) => {
+        // Always include form containers even if not directly visible
+        if (
+          el.tagName.toLowerCase() === "form" ||
+          el.getAttribute("role") === "form" ||
+          el.getAttribute("role") === "group"
+        ) {
+          return true;
+        }
+        return isVisible(el);
       });
 
       // Highlight elements and add numbers
@@ -383,33 +456,47 @@ class WebAutomationMCPServer {
 
       // Get the page hierarchy structure with optimized nesting
       const hierarchyData = await this.page.evaluate(() => {
-        const getAllTextContent = (el) => {
-          // Get all text content from element and its descendants, but not from interactive elements
-          const interactiveElements = new Set([
-            "input",
-            "button",
-            "select",
-            "textarea",
-            "a",
-          ]);
-          let allText = [];
-
-          const collectText = (node) => {
+        const getDirectTextContent = (el) => {
+          // Get only direct text nodes, not from children
+          const textNodes = [];
+          for (const node of el.childNodes) {
             if (node.nodeType === Node.TEXT_NODE) {
               const text = node.textContent.trim();
-              if (text) allText.push(text);
-            } else if (node.nodeType === Node.ELEMENT_NODE) {
-              // Don't collect text from interactive elements as they'll be shown separately
-              if (!interactiveElements.has(node.tagName.toLowerCase())) {
-                for (const child of node.childNodes) {
-                  collectText(child);
-                }
-              }
+              if (text) textNodes.push(text);
             }
-          };
+          }
+          return textNodes.join(" ").trim();
+        };
 
-          collectText(el);
-          return allText.join(" ").trim();
+        const getElementRole = (el) => {
+          const tagName = el.tagName.toLowerCase();
+          const type = el.type?.toLowerCase();
+          const role = el.getAttribute("role");
+
+          // Map form elements to semantic roles
+          if (tagName === "input") {
+            if (type === "checkbox") return "checkbox";
+            if (type === "radio") return "radio";
+            if (type === "submit") return "button";
+            return "textbox";
+          }
+
+          if (tagName === "select") return "listbox";
+          if (tagName === "textarea") return "textbox";
+          if (tagName === "button") return "button";
+          if (tagName === "a") return "link";
+          if (tagName === "img") return "img";
+          if (tagName === "ul" || tagName === "ol") return "list";
+          if (tagName === "li") return "listitem";
+          if (tagName === "p") return "paragraph";
+          if (tagName.match(/^h[1-6]$/)) return "heading";
+          if (tagName === "form") return "form";
+
+          // Use explicit role if provided
+          if (role) return role;
+
+          // Default to semantic tag name or generic container
+          return isSemanticElement(tagName) ? tagName : "div";
         };
 
         const isSemanticElement = (tagName) => {
@@ -467,35 +554,33 @@ class WebAutomationMCPServer {
 
         const shouldCollapse = (el) => {
           const tagName = el.tagName.toLowerCase();
-          // Don't collapse semantic elements or interactive elements
-          if (isSemanticElement(tagName) || hasInteractiveElement(el)) {
+          const role = getElementRole(el);
+
+          // Never collapse elements with semantic roles or interactive elements
+          if (role !== "div" || hasInteractiveElement(el)) {
             return false;
           }
 
-          // Check if this is a generic container (div, span) with only one child that's also generic
-          if (
-            (tagName === "div" || tagName === "span") &&
-            el.children.length === 1
-          ) {
-            const child = el.children[0];
-            const childTagName = child.tagName.toLowerCase();
+          // Check if this is a generic container with only text or one child
+          const hasOnlyText =
+            el.childNodes.length === 1 &&
+            el.childNodes[0].nodeType === Node.TEXT_NODE;
+          const hasOneChild = el.children.length === 1;
 
-            // If child is also a generic container, consider collapsing
-            if (
-              (childTagName === "div" || childTagName === "span") &&
-              !isSemanticElement(childTagName) &&
-              !hasInteractiveElement(child)
-            ) {
-              return true;
-            }
-          }
+          if (hasOnlyText) return false;
+          if (!hasOneChild) return false;
 
-          return false;
+          const child = el.children[0];
+          const childRole = getElementRole(child);
+
+          // If child has a semantic role, don't collapse
+          return childRole === "div" && !hasInteractiveElement(child);
         };
 
         const getElementInfo = (el, depth = 0) => {
           const tagName = el.tagName.toLowerCase();
           const elementId = el.getAttribute("gbt_link_text");
+          const type = el.type?.toLowerCase();
           const role = el.getAttribute("role");
           const ariaLabel = el.getAttribute("aria-label");
           const title = el.title;
@@ -503,82 +588,161 @@ class WebAutomationMCPServer {
           const value = el.value;
           const href = el.href;
           const alt = el.alt;
+          const required = el.required;
+          const selected = el.selected;
+          const checked = el.checked;
+          const name = el.name;
+          const label = el.labels?.[0]?.textContent?.trim();
 
-          // Check if we should collapse this element and its descendants
-          let actualElement = el;
-          let collapsedText = "";
+          // Get semantic role for the element
+          let semanticRole = getElementRole(el);
 
-          while (
-            shouldCollapse(actualElement) &&
-            actualElement.children.length === 1
-          ) {
-            // Collect any text content from the collapsed element
-            const elementText = getAllTextContent(actualElement);
-            if (elementText && !collapsedText.includes(elementText)) {
-              collapsedText = collapsedText
-                ? `${collapsedText} ${elementText}`
-                : elementText;
-            }
-            actualElement = actualElement.children[0];
+          // Special handling for form elements
+          if (tagName === "input" || tagName === "textarea") {
+            semanticRole = "textbox";
+            if (type === "checkbox") semanticRole = "checkbox";
+            if (type === "radio") semanticRole = "radio";
+            if (type === "submit") semanticRole = "button";
+          } else if (tagName === "select") {
+            semanticRole = "listbox";
+          } else if (tagName === "option") {
+            semanticRole = "option";
           }
 
-          const actualTagName = actualElement.tagName.toLowerCase();
-          const actualElementId =
-            actualElement.getAttribute("gbt_link_text") || elementId;
-          const actualRole = actualElement.getAttribute("role") || role;
+          // Get element description from various sources
+          const getElementDescription = (el) => {
+            // For form controls, use label or aria-label
+            if (el.tagName.match(/^(input|button|select|textarea)$/i)) {
+              return (
+                el.labels?.[0]?.textContent?.trim() ||
+                el.getAttribute("aria-label") ||
+                el.getAttribute("placeholder") ||
+                el.getAttribute("title") ||
+                el.value ||
+                ""
+              );
+            }
 
-          let elementInfo = {
-            tagName: actualRole || actualTagName,
-            ref: actualElementId,
-            text: collapsedText || getAllTextContent(actualElement),
-            attributes: {},
-            children: [],
+            // For links and buttons, combine text content with title/aria-label
+            if (el.tagName === "A" || el.tagName === "BUTTON") {
+              const text = el.textContent?.trim() || "";
+              const title = el.getAttribute("title")?.trim() || "";
+              const ariaLabel = el.getAttribute("aria-label")?.trim() || "";
+              return [text, title, ariaLabel].filter(Boolean).join(" - ");
+            }
+
+            // For images, use alt text or title
+            if (el.tagName === "IMG") {
+              return el.getAttribute("alt") || el.getAttribute("title") || "";
+            }
+
+            // For headings and other text elements, use direct text content
+            return getDirectTextContent(el);
           };
 
-          // Add special attributes from the actual element
-          if (
-            actualTagName === "h1" ||
-            actualTagName === "h2" ||
-            actualTagName === "h3" ||
-            actualTagName === "h4" ||
-            actualTagName === "h5" ||
-            actualTagName === "h6"
-          ) {
-            elementInfo.attributes.level = parseInt(actualTagName.charAt(1));
+          const description = getElementDescription(el);
+
+          // Check if this element or any of its children has an interactive element
+          const hasInteractive =
+            hasInteractiveElement(el) ||
+            Array.from(el.querySelectorAll("*")).some((child) =>
+              hasInteractiveElement(child)
+            );
+
+          // Build element info
+          let elementInfo = {
+            tagName: semanticRole,
+            ref:
+              elementId ||
+              (hasInteractive
+                ? `s${Date.now()}e${Math.floor(Math.random() * 1000)}`
+                : null),
+            text: description,
+            attributes: {},
+            children: [],
+            url: null,
+          };
+
+          // Handle headings
+          if (tagName.match(/^h[1-6]$/)) {
+            elementInfo.attributes.level = parseInt(tagName.charAt(1));
+            if (required) {
+              elementInfo.text =
+                (elementInfo.text || "") + " Required question";
+            }
           }
 
-          const actualAriaLabel =
-            actualElement.getAttribute("aria-label") || ariaLabel;
-          const actualTitle = actualElement.title || title;
-          const actualPlaceholder = actualElement.placeholder || placeholder;
-          const actualValue = actualElement.value || value;
-          const actualHref = actualElement.href || href;
-          const actualAlt = actualElement.alt || alt;
+          // Handle form elements
+          if (semanticRole === "textbox") {
+            if (label) elementInfo.text = label;
+            if (required)
+              elementInfo.text =
+                (elementInfo.text || "") + " Required question";
+          }
 
-          if (actualAriaLabel)
-            elementInfo.attributes.ariaLabel = actualAriaLabel;
-          if (actualTitle) elementInfo.attributes.title = actualTitle;
-          if (actualPlaceholder)
-            elementInfo.attributes.placeholder = actualPlaceholder;
-          if (actualValue) elementInfo.attributes.value = actualValue;
-          if (actualHref) elementInfo.attributes.href = actualHref;
-          if (actualAlt) elementInfo.attributes.alt = actualAlt;
+          // Handle links
+          if (semanticRole === "link" && href) {
+            elementInfo.url = href;
+          }
+
+          // Handle options
+          if (semanticRole === "option") {
+            if (selected) elementInfo.attributes.selected = true;
+          }
+
+          // Handle checkboxes and radios
+          if (semanticRole === "checkbox" || semanticRole === "radio") {
+            if (checked) elementInfo.attributes.checked = true;
+          }
+
+          // Add other relevant attributes
+          if (ariaLabel) elementInfo.attributes.ariaLabel = ariaLabel;
+          if (title) elementInfo.attributes.title = title;
+          if (placeholder) elementInfo.attributes.placeholder = placeholder;
+          if (
+            value &&
+            (semanticRole === "textbox" || semanticRole === "option")
+          ) {
+            elementInfo.attributes.value = value;
+          }
+          if (alt) elementInfo.attributes.alt = alt;
+          if (required) elementInfo.attributes.required = true;
 
           // Process children only if depth is reasonable
           if (depth < 8) {
-            for (const child of actualElement.children) {
+            for (const child of el.children) {
               const styles = window.getComputedStyle(child);
               if (styles.display !== "none" && styles.visibility !== "hidden") {
                 const childInfo = getElementInfo(child, depth + 1);
-                // Only add child if it has meaningful content
+                // Only add child if it has meaningful content or is semantic
                 if (
                   childInfo.ref ||
                   childInfo.text ||
                   childInfo.children.length > 0 ||
-                  isSemanticElement(childInfo.tagName)
+                  childInfo.tagName !== "div" ||
+                  childInfo.url
                 ) {
                   elementInfo.children.push(childInfo);
                 }
+              }
+            }
+          }
+
+          // Special handling for form containers
+          if (
+            semanticRole === "form" ||
+            semanticRole === "list" ||
+            semanticRole === "listitem"
+          ) {
+            // Collapse single-child containers that don't add semantic value
+            if (
+              elementInfo.children.length === 1 &&
+              !elementInfo.text &&
+              !elementInfo.ref
+            ) {
+              const child = elementInfo.children[0];
+              if (child.tagName !== "div") {
+                return child;
               }
             }
           }
@@ -596,32 +760,55 @@ class WebAutomationMCPServer {
         const spaces = "  ".repeat(indent);
         let output = "";
 
+        // Skip pure container elements with no meaningful content
+        if (
+          element.tagName === "div" &&
+          !element.text &&
+          !element.ref &&
+          !element.url &&
+          element.children.length === 0
+        ) {
+          return "";
+        }
+
         // Build the element line
         let elementLine = `${spaces}- ${element.tagName}`;
 
-        // Add text content if available (limit length for readability)
-        if (element.text && element.text.trim()) {
-          let text = element.text
-            .replace(/"/g, '\\"')
-            .replace(/\s+/g, " ")
-            .trim();
-          if (text.length > 100) {
-            text = text.substring(0, 100) + "...";
+        // Format description text
+        const formatDescription = (text) => {
+          if (!text) return "";
+          let formatted = text.replace(/"/g, '\\"').replace(/\s+/g, " ").trim();
+          if (formatted.length > 100) {
+            formatted = formatted.substring(0, 100) + "...";
           }
-          elementLine += ` "${text}"`;
+          return formatted;
+        };
+
+        // Add text content and description
+        const description = formatDescription(element.text);
+        if (description) {
+          elementLine += `: "${description}"`;
         }
 
-        // Add special attributes
+        // Add attributes in a specific order
         if (element.attributes.level) {
           elementLine += ` [level=${element.attributes.level}]`;
         }
-
-        // Add reference if available
+        // Always include ref if available, even for non-interactive elements
         if (element.ref) {
           elementLine += ` [ref=${element.ref}]`;
         }
+        if (element.attributes.selected) {
+          elementLine += ` [selected]`;
+        }
+        if (element.attributes.checked) {
+          elementLine += ` [checked]`;
+        }
+        if (element.attributes.required) {
+          elementLine += ` [required]`;
+        }
 
-        // Add other attributes
+        // Add value or placeholder
         if (element.attributes.placeholder) {
           elementLine += `: "${element.attributes.placeholder}"`;
         } else if (element.attributes.value) {
@@ -630,9 +817,17 @@ class WebAutomationMCPServer {
 
         output += elementLine + "\n";
 
+        // Add URL as a child element if present
+        if (element.url) {
+          output += `${spaces}  - /url: ${element.url}\n`;
+        }
+
         // Process children
         for (const child of element.children) {
-          output += formatHierarchy(child, indent + 1);
+          const childOutput = formatHierarchy(child, indent + 1);
+          if (childOutput) {
+            output += childOutput;
+          }
         }
 
         return output;
@@ -669,6 +864,10 @@ ${hierarchyYaml}\`\`\``;
           await element.click();
           this.logger.success(`Clicked element ${elementId}`);
           await this.waitFor(2000);
+
+          // Re-highlight elements after click to ensure proper element tracking
+          await this.highlightLinks();
+
           return { success: true, message: `Clicked element ${elementId}` };
         } else {
           throw new Error(`Element ${elementId} not found`);
@@ -685,6 +884,10 @@ ${hierarchyYaml}\`\`\``;
           await element.evaluate((el) => (el.value = ""));
           await element.type(text);
           this.logger.success(`Typed "${text}" into element ${elementId}`);
+
+          // Re-highlight elements after typing
+          await this.highlightLinks();
+
           return {
             success: true,
             message: `Typed "${text}" into element ${elementId}`,
