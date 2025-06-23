@@ -458,6 +458,9 @@ class WebAutomationMCPServer {
 
   async summarizePageHierarchy() {
     try {
+      // Always highlight links first to ensure gbt_link_text attributes are set
+      await this.highlightLinks();
+
       const pageTitle = await this.page.title();
       const currentUrl = this.page.url();
 
@@ -557,31 +560,6 @@ class WebAutomationMCPServer {
 
         const hasInteractiveElement = (el) => {
           return el.getAttribute("gbt_link_text") !== null;
-        };
-
-        const shouldCollapse = (el) => {
-          const tagName = el.tagName.toLowerCase();
-          const role = getElementRole(el);
-
-          // Never collapse elements with semantic roles or interactive elements
-          if (role !== "div" || hasInteractiveElement(el)) {
-            return false;
-          }
-
-          // Check if this is a generic container with only text or one child
-          const hasOnlyText =
-            el.childNodes.length === 1 &&
-            el.childNodes[0].nodeType === Node.TEXT_NODE;
-          const hasOneChild = el.children.length === 1;
-
-          if (hasOnlyText) return false;
-          if (!hasOneChild) return false;
-
-          const child = el.children[0];
-          const childRole = getElementRole(child);
-
-          // If child has a semantic role, don't collapse
-          return childRole === "div" && !hasInteractiveElement(child);
         };
 
         const getElementInfo = (el, depth = 0) => {
