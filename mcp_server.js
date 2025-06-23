@@ -14,8 +14,15 @@ import AnthropicClient from "./anthropic_client.js";
 import Logger from "./logger.js";
 import Prompts from "./prompts.js";
 import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
 
-dotenv.config();
+// Get the directory of the current module
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Load .env file from the same directory as this script
+dotenv.config({ path: path.join(__dirname, ".env") });
 
 class WebAutomationMCPServer {
   constructor() {
@@ -1105,24 +1112,43 @@ ${hierarchyYaml}\`\`\``;
           throw new Error(`Element ${elementId} not found for clearing`);
         }
       } else if (action.startsWith("ANALYZE")) {
+        // Check if Anthropic API key is configured
+        if (!process.env.ANTHROPIC_API_KEY) {
+          throw new Error(
+            "Anthropic API key not found. Please set ANTHROPIC_API_KEY in your .env file. You can get an API key from https://console.anthropic.com/"
+          );
+        }
+
         const analysisPrompt = action.replace("ANALYZE:", "").trim();
         const screenshotPath = await this.takeScreenshot(
           `analyze-${Date.now()}.jpg`
         );
 
-        const analysisResponse = await this.anthropicClient.analyzeWithClaude(
-          screenshotPath,
-          analysisPrompt,
-          this.systemMessage
-        );
+        try {
+          const analysisResponse = await this.anthropicClient.analyzeWithClaude(
+            screenshotPath,
+            analysisPrompt,
+            this.systemMessage
+          );
 
-        this.logger.success(`Analyzed with prompt: ${analysisPrompt}`);
-        return {
-          success: true,
-          message: `Analysis completed`,
-          analysis: analysisResponse,
-          screenshot: screenshotPath,
-        };
+          this.logger.success(`Analyzed with prompt: ${analysisPrompt}`);
+          return {
+            success: true,
+            message: `Analysis completed`,
+            analysis: analysisResponse,
+            screenshot: screenshotPath,
+          };
+        } catch (error) {
+          if (
+            error.message.includes("apiKey") ||
+            error.message.includes("authentication")
+          ) {
+            throw new Error(
+              "Failed to authenticate with Claude. Please check your ANTHROPIC_API_KEY in .env file is correct and valid."
+            );
+          }
+          throw error;
+        }
       } else {
         throw new Error(`Unknown action: ${action}`);
       }

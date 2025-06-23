@@ -1,14 +1,34 @@
 import Anthropic from "@anthropic-ai/sdk";
 import fs from "fs";
 import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
 
-dotenv.config();
+// Get the directory of the current module
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Load .env file from the same directory as this script
+dotenv.config({ path: path.join(__dirname, ".env") });
 
 class AnthropicClient {
   constructor(logger, modelName = "claude-3-5-sonnet-20241022") {
-    this.anthropic = new Anthropic({
-      apiKey: process.env.ANTHROPIC_API_KEY,
-    });
+    if (!process.env.ANTHROPIC_API_KEY) {
+      throw new Error(
+        "ANTHROPIC_API_KEY environment variable is not set. Please add it to your .env file."
+      );
+    }
+
+    try {
+      this.anthropic = new Anthropic({
+        apiKey: process.env.ANTHROPIC_API_KEY,
+      });
+    } catch (error) {
+      throw new Error(
+        `Failed to initialize Anthropic client: ${error.message}. Please check your ANTHROPIC_API_KEY.`
+      );
+    }
+
     this.logger = logger;
     this.modelName = modelName;
     this.conversationHistory = [];
