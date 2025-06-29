@@ -960,7 +960,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const typeResult = await automation.performAction(
           `TYPE:${args.element_id}:${args.text}`
         );
-        const typeHierarchy = await automation.safelyGetPageHierarchy();
+        const typeHierarchy =
+          await automation.pageHierarchy.safelyGetPageHierarchy();
         return {
           content: [
             {
@@ -975,7 +976,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ? `SCROLL:${args.direction}:${args.amount}`
           : `SCROLL:${args.direction}`;
         const scrollResult = await automation.performAction(scrollAction);
-        const scrollHierarchy = await automation.safelyGetPageHierarchy();
+        const scrollHierarchy =
+          await automation.pageHierarchy.safelyGetPageHierarchy();
         return {
           content: [
             {
@@ -989,7 +991,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const selectResult = await automation.performAction(
           `SELECT:${args.element_id}:${args.option}`
         );
-        const selectHierarchy = await automation.safelyGetPageHierarchy();
+        const selectHierarchy =
+          await automation.pageHierarchy.safelyGetPageHierarchy();
         return {
           content: [
             {
@@ -1003,7 +1006,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const hoverResult = await automation.performAction(
           `HOVER:${args.element_id}`
         );
-        const hoverHierarchy = await automation.safelyGetPageHierarchy();
+        const hoverHierarchy =
+          await automation.pageHierarchy.safelyGetPageHierarchy();
         return {
           content: [
             {
@@ -1017,7 +1021,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const pressResult = await automation.performAction(
           `PRESS:${args.keys}`
         );
-        const pressHierarchy = await automation.safelyGetPageHierarchy();
+        const pressHierarchy =
+          await automation.pageHierarchy.safelyGetPageHierarchy();
         return {
           content: [
             {
@@ -1044,7 +1049,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const clearResult = await automation.performAction(
           `CLEAR:${args.element_id}`
         );
-        const clearHierarchy = await automation.safelyGetPageHierarchy();
+        const clearHierarchy =
+          await automation.pageHierarchy.safelyGetPageHierarchy();
         return {
           content: [
             {

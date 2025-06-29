@@ -68,461 +68,375 @@ class PageHierarchy {
   }
 
   async summarizePageHierarchy() {
-    try {
-      // Clear previous element map
-      this.elementMap.clear();
+    const hierarchy = await this.page.evaluate(() => {
+      let refCounter = 1;
+      const elementMap = new Map();
+      const result = [];
 
-      // Check if page is still valid and not detached
-      try {
-        await this.page.evaluate(() => document.readyState);
-      } catch (error) {
-        if (error.message.includes("detached")) {
-          throw new Error(
-            "Page context is detached. Please navigate to a page first."
-          );
-        }
-        throw error;
+      // Helper function to check if element is visible
+      function isVisible(element) {
+        if (!element) return false;
+        const style = window.getComputedStyle(element);
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          style.opacity !== "0" &&
+          element.offsetWidth > 0 &&
+          element.offsetHeight > 0
+        );
       }
 
-      // Inject the DOMHierarchy class into the page and run it
-      const hierarchyData = await this.page.evaluate(() => {
-        // Define the DOMHierarchy class directly in the page context
-        // (We can't import modules in page.evaluate, so we inline it)
-        class DOMHierarchy {
-          constructor() {
-            this.elementMap = new Map();
-            this.refCounter = 1;
+      // Helper function to check if element is interactive
+      function isInteractive(element) {
+        const interactiveTags = [
+          "button",
+          "a",
+          "input",
+          "textarea",
+          "select",
+          "option",
+        ];
+        const interactiveRoles = [
+          "button",
+          "link",
+          "textbox",
+          "checkbox",
+          "radio",
+          "listbox",
+          "option",
+          "menuitem",
+        ];
+
+        // Check by tag name
+        if (interactiveTags.includes(element.tagName.toLowerCase())) {
+          return true;
+        }
+
+        // Check by role
+        const role = element.getAttribute("role");
+        if (role && interactiveRoles.includes(role.toLowerCase())) {
+          return true;
+        }
+
+        // Check for click handlers or tabindex
+        if (element.onclick || element.getAttribute("tabindex") === "0") {
+          return true;
+        }
+
+        return false;
+      }
+
+      // Helper function to check if element should be included
+      function shouldIncludeElement(element) {
+        if (!isVisible(element)) return false;
+
+        const tagName = element.tagName.toLowerCase();
+        const role = element.getAttribute("role");
+
+        // Always include interactive elements
+        if (isInteractive(element)) return true;
+
+        // Include elements with specific roles
+        if (role === "list" || role === "listitem") return true;
+
+        // Include semantic/structural elements (including label)
+        const semanticTags = [
+          "h1",
+          "h2",
+          "h3",
+          "h4",
+          "h5",
+          "h6",
+          "ul",
+          "ol",
+          "li",
+          "img",
+          "form",
+          "p",
+          "label",
+        ];
+        if (semanticTags.includes(tagName)) return true;
+
+        // Include elements with meaningful text content
+        const textContent = element.textContent?.trim();
+        if (
+          textContent &&
+          textContent.length > 0 &&
+          element.children.length === 0
+        ) {
+          return true;
+        }
+
+        return false;
+      }
+
+      // Helper function to get element type name
+      function getElementType(element) {
+        const tagName = element.tagName.toLowerCase();
+        const role = element.getAttribute("role");
+        const type = element.getAttribute("type");
+
+        // Handle input types specifically - keep as "input"
+        if (tagName === "input") {
+          return "input";
+        }
+
+        // Handle by role
+        if (role) {
+          if (role === "button") return "button";
+          if (role === "link") return "link";
+          if (role === "textbox") return "textbox";
+          if (role === "checkbox") return "checkbox";
+          if (role === "radio") return "radio";
+          if (role === "listbox") return "listbox";
+          if (role === "option") return "option";
+          if (role === "menuitem") return "menuitem";
+          if (role === "list") return "list";
+          if (role === "listitem") return "listitem";
+        }
+
+        // Handle by tag name
+        if (tagName === "button") return "button";
+        if (tagName === "a") return "link";
+        if (tagName === "textarea") return "textbox";
+        if (tagName === "select") return "listbox";
+        if (tagName === "option") return "option";
+        if (tagName === "img") return "img";
+        if (tagName === "ul" || tagName === "ol") return "list";
+        if (tagName === "li") return "listitem";
+        if (tagName === "p") return "paragraph";
+        if (tagName.match(/^h[1-6]$/)) return "heading";
+        if (tagName === "form") return "form";
+        if (tagName === "label") return "label";
+
+        return tagName;
+      }
+
+      // Helper function to get element description
+      function getElementDescription(element) {
+        const tagName = element.tagName.toLowerCase();
+        let description = "";
+
+        // Get text content
+        let text = "";
+        if (element.children.length === 0) {
+          text = element.textContent?.trim() || "";
+        } else {
+          // For elements with children, get direct text nodes
+          const textNodes = [];
+          for (let node of element.childNodes) {
+            if (node.nodeType === Node.TEXT_NODE) {
+              const nodeText = node.textContent?.trim();
+              if (nodeText) textNodes.push(nodeText);
+            }
           }
+          text = textNodes.join(" ");
+        }
 
-          generateSelector(el, ref) {
-            // First, add a unique attribute to the element for reliable selection
-            const uniqueAttr = `data-mcp-ref-${ref}`;
-            el.setAttribute(uniqueAttr, "true");
+        // Get meaningful attributes
+        const alt = element.getAttribute("alt");
+        const title = element.getAttribute("title");
+        const placeholder = element.getAttribute("placeholder");
+        const ariaLabel = element.getAttribute("aria-label");
+        const value = element.value;
 
-            // Use the unique attribute as the primary selector
-            return `[${uniqueAttr}]`;
+        // Determine the best label
+        let label = ariaLabel || alt || title || placeholder || text || "";
+
+        if (label && label.length > 0) {
+          description += `"${label}"`;
+        }
+
+        return description;
+      }
+
+      // Helper function to get metadata
+      function getMetadata(element) {
+        const metadata = [];
+        const tagName = element.tagName.toLowerCase();
+
+        // Heading level
+        if (tagName.match(/^h[1-6]$/)) {
+          const level = tagName.charAt(1);
+          metadata.push(`level=${level}`);
+        }
+
+        // Selected state for options
+        if (tagName === "option" && element.selected) {
+          metadata.push("selected");
+        }
+
+        // Checked state for checkboxes/radio
+        if (
+          tagName === "input" &&
+          (element.type === "checkbox" || element.type === "radio") &&
+          element.checked
+        ) {
+          metadata.push("checked");
+        }
+
+        return metadata;
+      }
+
+      // Helper function to get URL
+      function getUrl(element) {
+        const href = element.getAttribute("href");
+        if (href) {
+          return href;
+        }
+        return null;
+      }
+
+      // Helper function to assign reference and create selector
+      function assignRef(element) {
+        const ref = `s1e${refCounter++}`;
+        const attr = `data-mcp-ref-${ref.replace("s1e", "")}`;
+        element.setAttribute(attr, ref);
+        elementMap.set(ref, element);
+        return ref;
+      }
+
+      // Helper function to process element
+      function processElement(element, depth = 0) {
+        if (!shouldIncludeElement(element)) {
+          // Still process children for elements we don't include
+          for (let child of element.children) {
+            processElement(child, depth);
           }
+          return;
+        }
 
-          getDirectTextContent(el) {
-            let text = "";
-            for (let node of el.childNodes) {
-              if (node.nodeType === Node.TEXT_NODE) {
-                text += node.textContent.trim() + " ";
+        const ref = assignRef(element);
+        const elementType = getElementType(element);
+        const description = getElementDescription(element);
+        const metadata = getMetadata(element);
+        const url = getUrl(element);
+
+        // Build the line
+        const indent = "  ".repeat(depth);
+        let line = `${indent}- ${elementType}`;
+
+        if (description) {
+          line += ` ${description}`;
+        }
+
+        // Add metadata
+        if (metadata.length > 0) {
+          line += ` [${metadata.join("] [")}]`;
+        }
+
+        line += ` [ref=${ref}]`;
+
+        // Add colon for text content if it follows
+        const tagName = element.tagName.toLowerCase();
+        if (tagName.match(/^h[1-6]$/) && description) {
+          line += ":";
+        }
+
+        result.push(line);
+
+        // Add URL if present
+        if (url) {
+          result.push(`${indent}  - /url: ${url}`);
+        }
+
+        // Add standalone text content for elements with children
+        if (element.children.length > 0) {
+          const textNodes = [];
+          for (let node of element.childNodes) {
+            if (node.nodeType === Node.TEXT_NODE) {
+              const nodeText = node.textContent?.trim();
+              if (nodeText && nodeText.length > 20) {
+                // Only significant text
+                textNodes.push(nodeText);
               }
             }
-            return text.replace(/\s+/g, " ").trim();
           }
-
-          isInteractiveElement(el) {
-            const tagName = el.tagName.toLowerCase();
-            const type = el.getAttribute("type");
-            const role = el.getAttribute("role");
-
-            if (
-              ["button", "a", "input", "textarea", "select", "option"].includes(
-                tagName
-              )
-            ) {
-              return true;
-            }
-
-            if (
-              [
-                "button",
-                "link",
-                "textbox",
-                "checkbox",
-                "radio",
-                "listbox",
-                "option",
-                "menuitem",
-              ].includes(role)
-            ) {
-              return true;
-            }
-
-            if (
-              el.hasAttribute("onclick") ||
-              el.getAttribute("tabindex") === "0"
-            ) {
-              return true;
-            }
-
-            return false;
-          }
-
-          isVisible(el) {
-            const style = window.getComputedStyle(el);
-            const rect = el.getBoundingClientRect();
-
-            return (
-              style.display !== "none" &&
-              style.visibility !== "hidden" &&
-              style.opacity !== "0" &&
-              rect.width > 0 &&
-              rect.height > 0 &&
-              el.getAttribute("aria-hidden") !== "true" &&
-              !el.hidden
-            );
-          }
-
-          getElementRole(el) {
-            const tagName = el.tagName.toLowerCase();
-            const role = el.getAttribute("role");
-            const type = el.getAttribute("type");
-
-            if (role) return role;
-
-            const roleMap = {
-              h1: "heading",
-              h2: "heading",
-              h3: "heading",
-              h4: "heading",
-              h5: "heading",
-              h6: "heading",
-              button: "button",
-              a: "link",
-              input:
-                type === "checkbox"
-                  ? "checkbox"
-                  : type === "radio"
-                  ? "radio"
-                  : "textbox",
-              textarea: "textbox",
-              select: "listbox",
-              option: "option",
-              ul: "list",
-              ol: "list",
-              li: "listitem",
-              form: "form",
-              img: "img",
-              p: "paragraph",
-            };
-
-            return roleMap[tagName] || tagName;
-          }
-
-          getElementDescription(el) {
-            const role = this.getElementRole(el);
-            const ariaLabel = el.getAttribute("aria-label");
-            const title = el.getAttribute("title");
-            const alt = el.getAttribute("alt");
-            const placeholder = el.getAttribute("placeholder");
-            const value = el.value;
-            const href = el.getAttribute("href");
-            const type = el.getAttribute("type");
-            const name = el.getAttribute("name");
-            const id = el.id;
-            const ariaLevel = el.getAttribute("aria-level");
-            const checked = el.checked;
-            const selected = el.selected;
-            const disabled = el.disabled;
-            const required = el.required;
-
-            let description = role;
-            let displayText = "";
-            let attributes = [];
-
-            const directText = this.getDirectTextContent(el);
-            const allText = el.textContent?.trim().replace(/\s+/g, " ") || "";
-
-            if (ariaLabel) {
-              displayText = ariaLabel;
-            } else if (alt) {
-              displayText = alt;
-            } else if (title) {
-              displayText = title;
-            } else if (placeholder) {
-              displayText = placeholder;
-            } else if (directText && directText.length < 100) {
-              displayText = directText;
-            } else if (allText && allText.length < 100) {
-              displayText = allText;
-            }
-
-            if (displayText) {
-              description += ` "${displayText}"`;
-            }
-
-            if (href) {
-              attributes.push(`/url: ${href}`);
-            }
-
-            if (
-              type &&
-              ["email", "password", "search", "tel", "url", "number"].includes(
-                type
-              )
-            ) {
-              attributes.push(`type="${type}"`);
-            }
-
-            if (name) attributes.push(`name="${name}"`);
-            if (id) attributes.push(`id="${id}"`);
-            if (value && value.length < 50) attributes.push(`value="${value}"`);
-            if (ariaLevel) attributes.push(`level=${ariaLevel}`);
-
-            if (checked) attributes.push("checked");
-            if (selected) attributes.push("selected");
-            if (disabled) attributes.push("disabled");
-            if (required) attributes.push("required");
-
-            if (attributes.length > 0) {
-              description += ` [${attributes.join("] [")}]`;
-            }
-
-            return description;
-          }
-
-          shouldIncludeElement(el) {
-            const tagName = el.tagName.toLowerCase();
-
-            if (this.isInteractiveElement(el)) return true;
-
-            const semanticElements = [
-              "header",
-              "nav",
-              "main",
-              "section",
-              "article",
-              "aside",
-              "footer",
-              "h1",
-              "h2",
-              "h3",
-              "h4",
-              "h5",
-              "h6",
-              "form",
-              "fieldset",
-              "legend",
-              "ul",
-              "ol",
-              "li",
-              "dl",
-              "dt",
-              "dd",
-              "table",
-              "thead",
-              "tbody",
-              "tfoot",
-              "tr",
-              "th",
-              "td",
-              "p",
-              "blockquote",
-              "pre",
-              "code",
-              "img",
-              "figure",
-              "figcaption",
-              "details",
-              "summary",
-            ];
-
-            if (semanticElements.includes(tagName)) return true;
-
-            const role = el.getAttribute("role");
-            const importantRoles = [
-              "banner",
-              "navigation",
-              "main",
-              "complementary",
-              "contentinfo",
-              "list",
-              "listitem",
-              "heading",
-              "button",
-              "link",
-              "textbox",
-              "checkbox",
-              "radio",
-              "listbox",
-              "option",
-              "menuitem",
-              "dialog",
-            ];
-
-            if (importantRoles.includes(role)) return true;
-
-            if (tagName === "div") {
-              const hasInteractiveChild = el.querySelector(
-                'button, a, input, textarea, select, [role="button"], [role="link"], [role="textbox"], [tabindex="0"]'
-              );
-              const hasTextContent = this.getDirectTextContent(el).length > 0;
-              return hasInteractiveChild || hasTextContent;
-            }
-
-            return false;
-          }
-
-          processElement(el, depth = 0) {
-            if (!this.isVisible(el) || depth > 10) return null;
-
-            const shouldInclude = this.shouldIncludeElement(el);
-            const isInteractive = this.isInteractiveElement(el);
-
-            let elementInfo = null;
-
-            if (shouldInclude || isInteractive) {
-              const description = this.getElementDescription(el);
-              let ref = null;
-
-              if (isInteractive) {
-                const refNumber = this.refCounter++;
-                ref = `ref=${refNumber}`;
-                const selector = this.generateSelector(el, refNumber);
-                this.elementMap.set(refNumber.toString(), selector);
-              }
-
-              elementInfo = {
-                description: ref ? `${description} [${ref}]` : description,
-                children: [],
-                isInteractive,
-              };
-            }
-
-            const children = [];
-            for (const child of el.children) {
-              const childInfo = this.processElement(child, depth + 1);
-              if (childInfo) {
-                children.push(childInfo);
-              }
-            }
-
-            if (elementInfo) {
-              elementInfo.children = children;
-              return elementInfo;
-            }
-
-            return children.length === 1
-              ? children[0]
-              : children.length > 1
-              ? { description: "container", children }
-              : null;
-          }
-
-          formatHierarchy(element, indent = 0) {
-            if (!element) return "";
-
-            const indentStr = "  ".repeat(indent);
-            let result = `${indentStr}- ${element.description}`;
-
-            if (element.children && element.children.length > 0) {
-              result += ":\n";
-              for (const child of element.children) {
-                const childResult = this.formatHierarchy(child, indent + 1);
-                if (childResult.trim()) {
-                  result += childResult + "\n";
-                }
-              }
-              result = result.replace(/\n$/, "");
-            }
-
-            return result;
-          }
-
-          generateHierarchy() {
-            this.elementMap.clear();
-            this.refCounter = 1;
-
-            const body = document.body;
-            const hierarchy = this.processElement(body, 0);
-
-            const pageTitle = document.title;
-            const currentUrl = window.location.href;
-
-            const formattedHierarchy = this.formatHierarchy(hierarchy);
-
-            return {
-              summary: `- Page URL: ${currentUrl}
-- Page Title: ${pageTitle}
-- Page Snapshot
-\`\`\`yaml
-${formattedHierarchy}
-\`\`\``,
-              elementMap: Array.from(this.elementMap.entries()),
-              hierarchy: hierarchy,
-            };
+          if (textNodes.length > 0) {
+            result.push(`${indent}  - text: ${textNodes.join(" ")}`);
           }
         }
 
-        // Create instance and generate hierarchy
-        const domHierarchy = new DOMHierarchy();
-        return domHierarchy.generateHierarchy();
-      });
-
-      // Store the element map for later use by action methods
-      hierarchyData.elementMap.forEach(([ref, selector]) => {
-        this.elementMap.set(ref.toString(), selector);
-      });
-
-      // Save elementMap and hierarchy to window object for debugging/persistence
-      try {
-        await this.page.evaluate((data) => {
-          window.mcpElementMap = new Map(data.elementMap);
-          window.mcpDomHierarchy = data.hierarchy;
-          window.mcpHierarchySummary = data.summary;
-          window.mcpLastUpdated = new Date().toISOString();
-
-          // Also create a helper function to get element by ref
-          window.getMcpElement = function (ref) {
-            const selector = window.mcpElementMap.get(ref.toString());
-            if (selector) {
-              return document.querySelector(selector);
-            }
-            return null;
-          };
-
-          // Helper to get element directly by unique attribute
-          window.getMcpElementByAttr = function (ref) {
-            return document.querySelector(`[data-mcp-ref-${ref}]`);
-          };
-
-          // Helper to list all available refs
-          window.listMcpRefs = function () {
-            return Array.from(window.mcpElementMap.keys());
-          };
-
-          // Helper to list all elements with MCP attributes
-          window.listMcpElements = function () {
-            const elements = document.querySelectorAll("[data-mcp-ref-]");
-            return Array.from(elements).map((el) => {
-              const attr = Array.from(el.attributes).find((attr) =>
-                attr.name.startsWith("data-mcp-ref-")
-              );
-              const ref = attr ? attr.name.replace("data-mcp-ref-", "") : null;
-              return {
-                ref: ref,
-                element: el,
-                tagName: el.tagName,
-                textContent: el.textContent?.trim().substring(0, 50) || "",
-                selector: `[${attr.name}]`,
-              };
-            });
-          };
-
-          console.log("MCP: Saved elementMap and hierarchy to window object");
-          console.log(
-            "MCP: Available refs:",
-            Array.from(window.mcpElementMap.keys())
-          );
-          console.log(
-            "MCP: Elements are now tagged with unique data-mcp-ref-* attributes for reliable selection"
-          );
-          console.log(
-            "MCP: Use window.listMcpElements() to see detailed element information"
-          );
-        }, hierarchyData);
-      } catch (error) {
-        this.logger.debug(`Could not save to window object: ${error.message}`);
+        // Process children
+        for (let child of element.children) {
+          processElement(child, depth + 1);
+        }
       }
 
-      return hierarchyData.summary;
-    } catch (error) {
-      this.logger.error(`Error generating page hierarchy: ${error.message}`);
-      return "Error: Could not generate page hierarchy";
+      // Start processing from document
+      result.push("- Page Snapshot");
+
+      // Add document wrapper
+      const documentRef = assignRef(document.documentElement);
+      result.push(`- document [ref=${documentRef}]:`);
+
+      // Process body content
+      processElement(document.body, 1);
+
+      return {
+        hierarchy: result.join("\n"),
+        elementMap: Object.fromEntries(
+          Array.from(elementMap.entries()).map(([ref, element]) => [
+            ref,
+            `[data-mcp-ref-${ref.replace("s1e", "")}]`,
+          ])
+        ),
+      };
+    });
+
+    // Store the hierarchy and element map
+    this.elementMap.clear();
+    for (const [ref, selector] of Object.entries(hierarchy.elementMap)) {
+      this.elementMap.set(ref, selector);
     }
+
+    // Store in window object for debugging
+    await this.page.evaluate((hierarchyData) => {
+      window.mcpElementMap = hierarchyData.elementMap;
+      window.mcpHierarchySummary = hierarchyData.hierarchy;
+      window.mcpLastUpdated = new Date().toISOString();
+
+      // Helper functions for debugging
+      window.getMcpElement = (ref) => {
+        const selector = window.mcpElementMap[ref];
+        return selector ? document.querySelector(selector) : null;
+      };
+
+      window.getMcpElementByAttr = (attrValue) => {
+        return document.querySelector(`[data-mcp-ref-${attrValue}]`);
+      };
+
+      window.listMcpRefs = () => {
+        return Object.keys(window.mcpElementMap);
+      };
+
+      window.listMcpElements = () => {
+        const elements = {};
+        for (const [ref, selector] of Object.entries(window.mcpElementMap)) {
+          const element = document.querySelector(selector);
+          if (element) {
+            elements[ref] = {
+              tagName: element.tagName,
+              textContent: element.textContent?.trim().substring(0, 50),
+              selector: selector,
+            };
+          }
+        }
+        return elements;
+      };
+
+      console.log(
+        "MCP: Page hierarchy updated. Use window.listMcpRefs() to see all references."
+      );
+    }, hierarchy);
+
+    this.logger.debug(
+      `Generated page hierarchy with ${
+        Object.keys(hierarchy.elementMap).length
+      } elements`
+    );
+
+    return hierarchy.hierarchy;
   }
 }
 
