@@ -12,8 +12,6 @@ import puppeteer from "puppeteer";
 import fs from "fs";
 import AnthropicClient from "./anthropic_client.js";
 import Logger from "./logger.js";
-import Prompts from "./prompts.js";
-import DOMHierarchy from "./dom_hierarchy.js";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -246,7 +244,6 @@ class WebAutomationMCPServer {
     this.logger = new Logger({ logFile: null, showInTerminal: false }); // Console-only logging for MCP
     this.elementMap = new Map(); // Store element references
     this.anthropicClient = new AnthropicClient(this.logger);
-    this.systemMessage = Prompts.getSystemMessage();
     this.isInitialized = false;
     this.initializationError = null;
     this.initializationPromise = null;
