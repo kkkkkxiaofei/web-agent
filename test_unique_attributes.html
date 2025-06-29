@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Test Unique Attributes</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        padding: 20px;
+        max-width: 800px;
+        margin: 0 auto;
+      }
+      .container {
+        margin: 20px 0;
+        padding: 15px;
+        border: 1px solid #ddd;
+        border-radius: 5px;
+      }
+      button {
+        margin: 5px;
+        padding: 10px 15px;
+        background-color: #007bff;
+        color: white;
+        border: none;
+        border-radius: 3px;
+        cursor: pointer;
+      }
+      button:hover {
+        background-color: #0056b3;
+      }
+      input {
+        margin: 5px;
+        padding: 8px;
+        border: 1px solid #ccc;
+        border-radius: 3px;
+      }
+      .status {
+        margin-top: 10px;
+        padding: 10px;
+        background-color: #f8f9fa;
+        border-radius: 3px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Test Page for Unique Attributes</h1>
+    <p>
+      This page contains elements without semantic IDs or classes to test the
+      unique attribute system.
+    </p>
+
+    <div class="container">
+      <h2>Buttons without IDs</h2>
+      <button onclick="showAlert('Button 1')">Click Me 1</button>
+      <button onclick="showAlert('Button 2')">Click Me 2</button>
+      <button onclick="showAlert('Button 3')">Click Me 3</button>
+    </div>
+
+    <div class="container">
+      <h2>Input Fields</h2>
+      <input type="text" placeholder="Enter your name" />
+      <input type="email" placeholder="Enter your email" />
+      <input type="password" placeholder="Enter password" />
+      <button onclick="processForm()">Submit</button>
+    </div>
+
+    <div class="container">
+      <h2>Nested Elements</h2>
+      <div>
+        <div>
+          <button onclick="showAlert('Nested Button 1')">
+            Nested Action 1
+          </button>
+        </div>
+        <div>
+          <div>
+            <button onclick="showAlert('Nested Button 2')">
+              Nested Action 2
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="container">
+      <h2>Dynamic Elements</h2>
+      <button onclick="addDynamicButton()">Add Dynamic Button</button>
+      <div id="dynamic-container"></div>
+    </div>
+
+    <div id="status" class="status">
+      Ready to test unique attributes system...
+    </div>
+
+    <script>
+      function showAlert(message) {
+        document.getElementById("status").textContent = `Clicked: ${message}`;
+        setTimeout(() => {
+          document.getElementById("status").textContent =
+            "Ready to test unique attributes system...";
+        }, 2000);
+      }
+
+      function processForm() {
+        const inputs = document.querySelectorAll("input");
+        let values = [];
+        inputs.forEach((input) => {
+          if (input.value) values.push(`${input.placeholder}: ${input.value}`);
+        });
+
+        if (values.length > 0) {
+          document.getElementById(
+            "status"
+          ).textContent = `Form data: ${values.join(", ")}`;
+        } else {
+          document.getElementById("status").textContent =
+            "Form submitted (no data entered)";
+        }
+      }
+
+      let dynamicCounter = 1;
+      function addDynamicButton() {
+        const container = document.getElementById("dynamic-container");
+        const button = document.createElement("button");
+        button.textContent = `Dynamic Button ${dynamicCounter}`;
+        button.onclick = () => showAlert(`Dynamic Button ${dynamicCounter}`);
+        container.appendChild(button);
+        dynamicCounter++;
+
+        document.getElementById("status").textContent = `Added dynamic button ${
+          dynamicCounter - 1
+        }`;
+      }
+
+      // Console helpers for testing
+      window.testMcpSystem = function () {
+        console.log("=== MCP System Test ===");
+        console.log(
+          "Available refs:",
+          window.listMcpRefs?.() || "No refs available"
+        );
+        console.log(
+          "MCP Elements:",
+          window.listMcpElements?.() || "No elements tracked"
+        );
+        console.log("Element map:", window.mcpElementMap || "No element map");
+      };
+
+      console.log(
+        "Test page loaded. Use window.testMcpSystem() to test MCP functionality."
+      );
+    </script>
+  </body>
+</html>

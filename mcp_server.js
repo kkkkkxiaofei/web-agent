@@ -13,6 +13,7 @@ import fs from "fs";
 import AnthropicClient from "./anthropic_client.js";
 import Logger from "./logger.js";
 import Prompts from "./prompts.js";
+import DOMHierarchy from "./dom_hierarchy.js";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -24,28 +25,226 @@ const __dirname = path.dirname(__filename);
 // Load .env file from the same directory as this script
 dotenv.config({ path: path.join(__dirname, ".env") });
 
+// ========================================
+// TOOL CONFIGURATION - Enable/Disable Tools
+// ========================================
+const TOOL_CONFIG = {
+  web_navigate: true, // Navigate to URLs and highlight elements
+  web_click: true, // Click on elements
+  web_type: true, // Type text into inputs
+  web_scroll: true, // Scroll page up/down
+  web_select: true, // Select dropdown options
+  web_hover: false, // Hover over elements
+  web_press_key: false, // Press keyboard keys
+  web_wait: true, // Wait for specified time
+  web_clear: false, // Clear input fields
+  web_screenshot: true, // Take screenshots
+  web_analyze: true, // AI vision analysis of page
+};
+
+// Helper function to get enabled tools
+function getEnabledTools() {
+  const allTools = [
+    {
+      name: "web_navigate",
+      description:
+        "Navigate to a URL and automatically highlight all interactive elements with numbered overlays. Returns detailed DOM hierarchy about each element with [ref=X] as element_id, including type, text content, placeholders, options, and more to help you understand what actions can be taken on the page.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          url: {
+            type: "string",
+            description: "The URL to navigate to (e.g., 'https://example.com')",
+          },
+        },
+        required: ["url"],
+      },
+    },
+    {
+      name: "web_click",
+      description:
+        "Click on a web element using its reference number from the DOM hierarchy. The element must be referenced as [ref=X] in the DOM hierarchy. Use the reference number (e.g., '1', '5', '12') that corresponds to the interactive element you want to click.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          element_id: {
+            type: "string",
+            description:
+              "The reference number from the DOM hierarchy (e.g., '1', '5', '12') corresponding to the [ref=X] element you want to click",
+          },
+        },
+        required: ["element_id"],
+      },
+    },
+    {
+      name: "web_type",
+      description:
+        "Type text into an input field, textarea, or other text-editable element using its reference number from the DOM hierarchy. The element must be referenced as [ref=X] in the DOM hierarchy output from the previous web_navigate step.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          element_id: {
+            type: "string",
+            description:
+              "The reference number from the DOM hierarchy (e.g., '3') corresponding to the [ref=X] input field you want to type into",
+          },
+          text: {
+            type: "string",
+            description: "The text to type into the field",
+          },
+        },
+        required: ["element_id", "text"],
+      },
+    },
+    {
+      name: "web_scroll",
+      description:
+        "Scroll the page vertically to reveal more content. Useful for long pages, infinite scroll, or accessing elements outside the current viewport.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          direction: {
+            type: "string",
+            enum: ["up", "down"],
+            description: "The direction to scroll ('up' or 'down')",
+          },
+          amount: {
+            type: "number",
+            description:
+              "Optional scroll distance in pixels (default: 500, range: 1-5000)",
+          },
+        },
+        required: ["direction"],
+      },
+    },
+    {
+      name: "web_select",
+      description:
+        "Select an option from a dropdown menu or select element using its reference number from the DOM hierarchy. The element must be referenced as [ref=X] in the DOM hierarchy output from the previous web_navigate step. Works with both standard HTML select elements and custom dropdown implementations.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          element_id: {
+            type: "string",
+            description:
+              "The reference number from the DOM hierarchy (e.g., '4') corresponding to the [ref=X] dropdown element you want to select from",
+          },
+          option: {
+            type: "string",
+            description:
+              "The option text or value to select (e.g., 'United States', 'option-value-123')",
+          },
+        },
+        required: ["element_id", "option"],
+      },
+    },
+    {
+      name: "web_hover",
+      description:
+        "Hover the mouse over a web element using its reference number from the DOM hierarchy to trigger hover effects, reveal hidden menus, or show tooltips. The element must be referenced as [ref=X] in the DOM hierarchy output from the previous web_navigate step. Useful for dropdown menus and interactive elements.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          element_id: {
+            type: "string",
+            description:
+              "The reference number from the DOM hierarchy (e.g., '7') corresponding to the [ref=X] element you want to hover over",
+          },
+        },
+        required: ["element_id"],
+      },
+    },
+    {
+      name: "web_press_key",
+      description:
+        "Press keyboard keys or key combinations to trigger shortcuts, submit forms, navigate, or perform other keyboard-based actions.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          keys: {
+            type: "string",
+            description:
+              "The key or key combination to press. Examples: 'Enter', 'Tab', 'Escape', 'Ctrl+A', 'Shift+Tab', 'Ctrl+C', 'Ctrl+V'",
+          },
+        },
+        required: ["keys"],
+      },
+    },
+    {
+      name: "web_wait",
+      description:
+        "Pause execution for a specified time to wait for page loads, animations, or dynamic content to appear. Useful when pages need time to update after interactions.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          seconds: {
+            type: "number",
+            description:
+              "The number of seconds to wait. Supports decimals for precise timing (e.g., 1.5, 2.0, 0.5). Range: 0.1-60 seconds",
+          },
+        },
+        required: ["seconds"],
+      },
+    },
+    {
+      name: "web_clear",
+      description:
+        "Clear all text content from an input field, textarea, or other editable element using its reference number from the DOM hierarchy. The element must be referenced as [ref=X] in the DOM hierarchy output from the previous web_navigate step. Equivalent to selecting all text and deleting it.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          element_id: {
+            type: "string",
+            description:
+              "The reference number from the DOM hierarchy (e.g., '2') corresponding to the [ref=X] input field you want to clear",
+          },
+        },
+        required: ["element_id"],
+      },
+    },
+    {
+      name: "web_screenshot",
+      description:
+        "Capture a screenshot of the current page state for visual reference or debugging.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          filename: {
+            type: "string",
+            description:
+              "Optional custom filename for the screenshot (without extension). If not provided, a timestamp-based name will be used.",
+          },
+        },
+      },
+    },
+    {
+      name: "web_analyze",
+      description:
+        "Analyze the current page content using AI's capabilities of understanding screenshot. ONLY use this tool when the user explicitly mentions 'analyze page' or 'extract info from the page'.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          prompt: {
+            type: "string",
+            description:
+              "The analysis question or instruction (e.g., 'What products are shown on this page?', 'Is the login successful?', 'Extract all the prices displayed')",
+          },
+        },
+        required: ["prompt"],
+      },
+    },
+  ];
+
+  // Filter tools based on configuration
+  return allTools.filter((tool) => TOOL_CONFIG[tool.name] === true);
+}
+
 class WebAutomationMCPServer {
   constructor() {
     this.browser = null;
     this.page = null;
-
-    // Try to setup logging, but fall back gracefully if file system is read-only
-    let logFile = null;
-    try {
-      this.ensureLogsDirectory();
-      logFile = `logs/mcp-server-${new Date().toISOString()}.log`;
-    } catch (error) {
-      // If we can't create logs directory, disable file logging
-      console.error(
-        "Warning: Could not setup file logging, continuing without log files:",
-        error.message
-      );
-    }
-
-    this.logger = new Logger({
-      logFile: logFile, // Will be null if file logging failed to setup
-      showInTerminal: false, // Disable terminal output for MCP server to avoid interfering with stdio
-    });
+    this.logger = new Logger({ logFile: null, showInTerminal: false }); // Console-only logging for MCP
+    this.elementMap = new Map(); // Store element references
     this.anthropicClient = new AnthropicClient(this.logger);
     this.systemMessage = Prompts.getSystemMessage();
     this.isInitialized = false;
@@ -220,614 +419,521 @@ class WebAutomationMCPServer {
     }
   }
 
-  async highlightLinks() {
-    this.logger.debug("Highlighting interactive elements...");
+  async clearWindowObjectData() {
+    try {
+      await this.page.evaluate(() => {
+        // Clear window object data
+        window.mcpElementMap = null;
+        window.mcpDomHierarchy = null;
+        window.mcpHierarchySummary = null;
+        window.mcpLastUpdated = null;
+        window.getMcpElement = null;
+        window.listMcpRefs = null;
 
-    const elements = await this.page.evaluate(() => {
-      // Remove previous highlights
-      const existingHighlights = document.querySelectorAll(
-        "[data-gbt-highlight]"
-      );
-      existingHighlights.forEach((el) => {
-        el.style.border = "";
-        el.style.position = "";
-        el.removeAttribute("data-gbt-highlight");
-        el.removeAttribute("gbt_link_text");
-      });
-
-      // Remove previous number overlays
-      const existingNumbers = document.querySelectorAll(".gbt-element-number");
-      existingNumbers.forEach((el) => el.remove());
-
-      // Find all interactive elements
-      const selectors = [
-        "a[href]",
-        "button",
-        'input:not([type="hidden"])',
-        "textarea",
-        "select",
-        "[onclick]",
-        '[role="button"]',
-        '[role="link"]',
-        '[role="textbox"]',
-        '[role="checkbox"]',
-        '[role="radio"]',
-        '[role="switch"]',
-        '[role="combobox"]',
-        '[role="listbox"]',
-        '[role="menuitem"]',
-        '[role="menuitemcheckbox"]',
-        '[role="menuitemradio"]',
-        '[role="option"]',
-        '[role="searchbox"]',
-        '[role="spinbutton"]',
-        '[role="slider"]',
-        '[role="tab"]',
-        '[contenteditable="true"]',
-        "[tabindex]",
-      ];
-
-      // First pass: collect all directly interactive elements
-      const interactiveElements = new Set();
-      selectors.forEach((selector) => {
-        document.querySelectorAll(selector).forEach((el) => {
-          interactiveElements.add(el);
+        // Remove all MCP-specific attributes from elements
+        const mcpElements = document.querySelectorAll("[data-mcp-ref]");
+        mcpElements.forEach((el) => {
+          // Remove all attributes that start with 'data-mcp-ref'
+          const attributes = Array.from(el.attributes);
+          attributes.forEach((attr) => {
+            if (attr.name.startsWith("data-mcp-ref")) {
+              el.removeAttribute(attr.name);
+            }
+          });
         });
+
+        // Also use a more comprehensive selector to catch all variants
+        const allMcpElements = document.querySelectorAll("*");
+        allMcpElements.forEach((el) => {
+          const attributes = Array.from(el.attributes);
+          attributes.forEach((attr) => {
+            if (attr.name.startsWith("data-mcp-ref-")) {
+              el.removeAttribute(attr.name);
+            }
+          });
+        });
+
+        console.log(
+          "MCP: Cleared window object data and removed MCP attributes"
+        );
       });
-
-      // Second pass: collect parent containers of interactive elements
-      const containers = new Set();
-      interactiveElements.forEach((el) => {
-        let parent = el.parentElement;
-        while (parent && parent !== document.body) {
-          if (
-            parent.tagName.toLowerCase() === "form" ||
-            parent.tagName.toLowerCase() === "fieldset" ||
-            parent.getAttribute("role") === "group" ||
-            parent.getAttribute("role") === "form" ||
-            parent.getAttribute("role") === "toolbar" ||
-            parent.getAttribute("role") === "menu" ||
-            parent.getAttribute("role") === "menubar" ||
-            parent.getAttribute("role") === "tablist" ||
-            parent.getAttribute("role") === "listbox" ||
-            parent.getAttribute("role") === "radiogroup"
-          ) {
-            containers.add(parent);
-          }
-          parent = parent.parentElement;
-        }
-      });
-
-      // Combine both sets and convert to array
-      const allElements = [...interactiveElements, ...containers];
-
-      // Helper function to check if an element is visible
-      const isVisible = (el) => {
-        if (!el) return false;
-
-        const rect = el.getBoundingClientRect();
-        const style = window.getComputedStyle(el);
-
-        // Basic visibility checks
-        if (
-          style.visibility === "hidden" ||
-          style.display === "none" ||
-          style.opacity === "0" ||
-          rect.width === 0 ||
-          rect.height === 0
-        ) {
-          return false;
-        }
-
-        // Check if element is in viewport
-        if (
-          rect.top >= window.innerHeight ||
-          rect.bottom <= 0 ||
-          rect.left >= window.innerWidth ||
-          rect.right <= 0
-        ) {
-          return false;
-        }
-
-        // Check if element is covered by other elements
-        const center = {
-          x: rect.left + rect.width / 2,
-          y: rect.top + rect.height / 2,
-        };
-
-        const elementAtPoint = document.elementFromPoint(center.x, center.y);
-        return el === elementAtPoint || el.contains(elementAtPoint);
-      };
-
-      // Filter visible elements and their containers
-      const visibleElements = allElements.filter((el) => {
-        // Always include form containers even if not directly visible
-        if (
-          el.tagName.toLowerCase() === "form" ||
-          el.getAttribute("role") === "form" ||
-          el.getAttribute("role") === "group"
-        ) {
-          return true;
-        }
-        return isVisible(el);
-      });
-
-      // Highlight elements and add numbers
-      visibleElements.forEach((el, index) => {
-        const elementNumber = index + 1;
-        el.setAttribute("gbt_link_text", elementNumber);
-        el.setAttribute("data-gbt-highlight", "true");
-        el.style.border = "2px solid red";
-
-        // Create number overlay
-        const numberOverlay = document.createElement("div");
-        numberOverlay.className = "gbt-element-number";
-        numberOverlay.textContent = elementNumber;
-        numberOverlay.style.cssText = `
-          position: absolute;
-          top: ${el.getBoundingClientRect().top + window.pageYOffset - 5}px;
-          left: ${el.getBoundingClientRect().left + window.pageXOffset - 5}px;
-          width: 20px;
-          height: 20px;
-          background-color: red;
-          color: white;
-          font-size: 12px;
-          font-weight: bold;
-          text-align: center;
-          line-height: 20px;
-          border-radius: 50%;
-          z-index: 10000;
-          pointer-events: none;
-        `;
-        document.body.appendChild(numberOverlay);
-      });
-
-      return visibleElements.length;
-    });
-
-    this.logger.success(`Highlighted ${elements} interactive elements`);
-    return elements;
+    } catch (error) {
+      this.logger.debug(`Could not clear window object: ${error.message}`);
+    }
   }
 
-  async collectElementsInfo() {
-    // Collect detailed information about all interactive elements
-    const elementsInfo = await this.page.evaluate(() => {
-      const elements = document.querySelectorAll("[gbt_link_text]");
-      return Array.from(elements).map((el, index) => {
-        const rect = el.getBoundingClientRect();
-        const styles = window.getComputedStyle(el);
-
-        // Get element text content (trimmed and limited)
-        let textContent = el.textContent?.trim() || "";
-        if (textContent.length > 100) {
-          textContent = textContent.substring(0, 100) + "...";
-        }
-
-        // Get placeholder for inputs
-        const placeholder = el.placeholder || "";
-
-        // Get value for inputs
-        const value = el.value || "";
-
-        // Get href for links
-        const href = el.href || "";
-
-        // Get options for select elements
-        let options = [];
-        if (el.tagName.toLowerCase() === "select") {
-          options = Array.from(el.options).map((opt) => ({
-            text: opt.text.trim(),
-            value: opt.value,
-          }));
-        }
-
-        return {
-          id: el.getAttribute("gbt_link_text"),
-          tagName: el.tagName.toLowerCase(),
-          type: el.type || "",
-          textContent: textContent,
-          placeholder: placeholder,
-          value: value,
-          href: href,
-          className: el.className || "",
-          id_attr: el.id || "",
-          name: el.name || "",
-          role: el.getAttribute("role") || "",
-          ariaLabel: el.getAttribute("aria-label") || "",
-          title: el.title || "",
-          disabled: el.disabled || false,
-          required: el.required || false,
-          options: options,
-          position: {
-            x: Math.round(rect.left),
-            y: Math.round(rect.top),
-            width: Math.round(rect.width),
-            height: Math.round(rect.height),
-          },
-          visible:
-            rect.width > 0 &&
-            rect.height > 0 &&
-            styles.visibility !== "hidden" &&
-            styles.display !== "none",
-        };
-      });
-    });
-
-    return elementsInfo;
+  async safelyGetPageHierarchy() {
+    try {
+      return await this.summarizePageHierarchy();
+    } catch (error) {
+      if (
+        error.message.includes("detached") ||
+        error.message.includes("Execution context")
+      ) {
+        this.logger.warning(
+          `Page context detached, returning minimal info: ${error.message}`
+        );
+        return `Page state changed. Current URL: ${this.page.url()}\n\nTo see updated element references, please use web_navigate to refresh the page hierarchy.`;
+      }
+      throw error;
+    }
   }
 
   async summarizePageHierarchy() {
     try {
-      // Always highlight links first to ensure gbt_link_text attributes are set
-      await this.highlightLinks();
+      // Clear previous element map
+      this.elementMap.clear();
 
-      const pageTitle = await this.page.title();
-      const currentUrl = this.page.url();
+      // Check if page is still valid and not detached
+      try {
+        await this.page.evaluate(() => document.readyState);
+      } catch (error) {
+        if (error.message.includes("detached")) {
+          throw new Error(
+            "Page context is detached. Please navigate to a page first."
+          );
+        }
+        throw error;
+      }
 
-      // Get the page hierarchy structure with optimized nesting
+      // Inject the DOMHierarchy class into the page and run it
       const hierarchyData = await this.page.evaluate(() => {
-        const getDirectTextContent = (el) => {
-          // Get only direct text nodes, not from children
-          const textNodes = [];
-          for (const node of el.childNodes) {
-            if (node.nodeType === Node.TEXT_NODE) {
-              const text = node.textContent.trim();
-              if (text) textNodes.push(text);
-            }
-          }
-          return textNodes.join(" ").trim();
-        };
-
-        const getElementRole = (el) => {
-          const tagName = el.tagName.toLowerCase();
-          const type = el.type?.toLowerCase();
-          const role = el.getAttribute("role");
-
-          // Map form elements to semantic roles
-          if (tagName === "input") {
-            if (type === "checkbox") return "checkbox";
-            if (type === "radio") return "radio";
-            if (type === "submit") return "button";
-            return "textbox";
+        // Define the DOMHierarchy class directly in the page context
+        // (We can't import modules in page.evaluate, so we inline it)
+        class DOMHierarchy {
+          constructor() {
+            this.elementMap = new Map();
+            this.refCounter = 1;
           }
 
-          if (tagName === "select") return "listbox";
-          if (tagName === "textarea") return "textbox";
-          if (tagName === "button") return "button";
-          if (tagName === "a") return "link";
-          if (tagName === "img") return "img";
-          if (tagName === "ul" || tagName === "ol") return "list";
-          if (tagName === "li") return "listitem";
-          if (tagName === "p") return "paragraph";
-          if (tagName.match(/^h[1-6]$/)) return "heading";
-          if (tagName === "form") return "form";
+          generateSelector(el, ref) {
+            // First, add a unique attribute to the element for reliable selection
+            const uniqueAttr = `data-mcp-ref-${ref}`;
+            el.setAttribute(uniqueAttr, "true");
 
-          // Use explicit role if provided
-          if (role) return role;
-
-          // Default to semantic tag name or generic container
-          return isSemanticElement(tagName) ? tagName : "div";
-        };
-
-        const isSemanticElement = (tagName) => {
-          const semanticTags = [
-            "header",
-            "nav",
-            "main",
-            "article",
-            "section",
-            "aside",
-            "footer",
-            "h1",
-            "h2",
-            "h3",
-            "h4",
-            "h5",
-            "h6",
-            "p",
-            "ul",
-            "ol",
-            "li",
-            "form",
-            "table",
-            "thead",
-            "tbody",
-            "tr",
-            "td",
-            "th",
-            "img",
-            "video",
-            "audio",
-            "canvas",
-            "svg",
-            "input",
-            "button",
-            "select",
-            "textarea",
-            "label",
-            "fieldset",
-            "blockquote",
-            "pre",
-            "code",
-            "time",
-            "address",
-            "details",
-            "summary",
-            "dialog",
-          ];
-          return semanticTags.includes(tagName);
-        };
-
-        const hasInteractiveElement = (el) => {
-          return el.getAttribute("gbt_link_text") !== null;
-        };
-
-        const getElementInfo = (el, depth = 0) => {
-          const tagName = el.tagName.toLowerCase();
-          const elementId = el.getAttribute("gbt_link_text");
-          const type = el.type?.toLowerCase();
-          const role = el.getAttribute("role");
-          const ariaLabel = el.getAttribute("aria-label");
-          const title = el.title;
-          const placeholder = el.placeholder;
-          const value = el.value;
-          const href = el.href;
-          const alt = el.alt;
-          const required = el.required;
-          const selected = el.selected;
-          const checked = el.checked;
-          const name = el.name;
-          const label = el.labels?.[0]?.textContent?.trim();
-
-          // Get semantic role for the element
-          let semanticRole = getElementRole(el);
-
-          // Special handling for form elements
-          if (tagName === "input" || tagName === "textarea") {
-            semanticRole = "textbox";
-            if (type === "checkbox") semanticRole = "checkbox";
-            if (type === "radio") semanticRole = "radio";
-            if (type === "submit") semanticRole = "button";
-          } else if (tagName === "select") {
-            semanticRole = "listbox";
-          } else if (tagName === "option") {
-            semanticRole = "option";
+            // Use the unique attribute as the primary selector
+            return `[${uniqueAttr}]`;
           }
 
-          // Get element description from various sources
-          const getElementDescription = (el) => {
-            // For form controls, use label or aria-label
-            if (el.tagName.match(/^(input|button|select|textarea)$/i)) {
-              return (
-                el.labels?.[0]?.textContent?.trim() ||
-                el.getAttribute("aria-label") ||
-                el.getAttribute("placeholder") ||
-                el.getAttribute("title") ||
-                el.value ||
-                ""
-              );
+          getDirectTextContent(el) {
+            let text = "";
+            for (let node of el.childNodes) {
+              if (node.nodeType === Node.TEXT_NODE) {
+                text += node.textContent.trim() + " ";
+              }
+            }
+            return text.replace(/\s+/g, " ").trim();
+          }
+
+          isInteractiveElement(el) {
+            const tagName = el.tagName.toLowerCase();
+            const type = el.getAttribute("type");
+            const role = el.getAttribute("role");
+
+            if (
+              ["button", "a", "input", "textarea", "select", "option"].includes(
+                tagName
+              )
+            ) {
+              return true;
             }
 
-            // For links and buttons, combine text content with title/aria-label
-            if (el.tagName === "A" || el.tagName === "BUTTON") {
-              const text = el.textContent?.trim() || "";
-              const title = el.getAttribute("title")?.trim() || "";
-              const ariaLabel = el.getAttribute("aria-label")?.trim() || "";
-              return [text, title, ariaLabel].filter(Boolean).join(" - ");
+            if (
+              [
+                "button",
+                "link",
+                "textbox",
+                "checkbox",
+                "radio",
+                "listbox",
+                "option",
+                "menuitem",
+              ].includes(role)
+            ) {
+              return true;
             }
 
-            // For images, use alt text or title
-            if (el.tagName === "IMG") {
-              return el.getAttribute("alt") || el.getAttribute("title") || "";
+            if (
+              el.hasAttribute("onclick") ||
+              el.getAttribute("tabindex") === "0"
+            ) {
+              return true;
             }
 
-            // For headings and other text elements, use direct text content
-            return getDirectTextContent(el);
-          };
+            return false;
+          }
 
-          const description = getElementDescription(el);
+          isVisible(el) {
+            const style = window.getComputedStyle(el);
+            const rect = el.getBoundingClientRect();
 
-          // Check if this element or any of its children has an interactive element
-          const hasInteractive =
-            hasInteractiveElement(el) ||
-            Array.from(el.querySelectorAll("*")).some((child) =>
-              hasInteractiveElement(child)
+            return (
+              style.display !== "none" &&
+              style.visibility !== "hidden" &&
+              style.opacity !== "0" &&
+              rect.width > 0 &&
+              rect.height > 0 &&
+              el.getAttribute("aria-hidden") !== "true" &&
+              !el.hidden
             );
+          }
 
-          // Build element info
-          let elementInfo = {
-            tagName: semanticRole,
-            ref:
-              elementId ||
-              (hasInteractive
-                ? `s${Date.now()}e${Math.floor(Math.random() * 1000)}`
-                : null),
-            text: description,
-            attributes: {},
-            children: [],
-            url: null,
-          };
+          getElementRole(el) {
+            const tagName = el.tagName.toLowerCase();
+            const role = el.getAttribute("role");
+            const type = el.getAttribute("type");
 
-          // Handle headings
-          if (tagName.match(/^h[1-6]$/)) {
-            elementInfo.attributes.level = parseInt(tagName.charAt(1));
-            if (required) {
-              elementInfo.text =
-                (elementInfo.text || "") + " Required question";
+            if (role) return role;
+
+            const roleMap = {
+              h1: "heading",
+              h2: "heading",
+              h3: "heading",
+              h4: "heading",
+              h5: "heading",
+              h6: "heading",
+              button: "button",
+              a: "link",
+              input:
+                type === "checkbox"
+                  ? "checkbox"
+                  : type === "radio"
+                  ? "radio"
+                  : "textbox",
+              textarea: "textbox",
+              select: "listbox",
+              option: "option",
+              ul: "list",
+              ol: "list",
+              li: "listitem",
+              form: "form",
+              img: "img",
+              p: "paragraph",
+            };
+
+            return roleMap[tagName] || tagName;
+          }
+
+          getElementDescription(el) {
+            const role = this.getElementRole(el);
+            const ariaLabel = el.getAttribute("aria-label");
+            const title = el.getAttribute("title");
+            const alt = el.getAttribute("alt");
+            const placeholder = el.getAttribute("placeholder");
+            const value = el.value;
+            const href = el.getAttribute("href");
+            const type = el.getAttribute("type");
+            const name = el.getAttribute("name");
+            const id = el.id;
+            const ariaLevel = el.getAttribute("aria-level");
+            const checked = el.checked;
+            const selected = el.selected;
+            const disabled = el.disabled;
+            const required = el.required;
+
+            let description = role;
+            let displayText = "";
+            let attributes = [];
+
+            const directText = this.getDirectTextContent(el);
+            const allText = el.textContent?.trim().replace(/\s+/g, " ") || "";
+
+            if (ariaLabel) {
+              displayText = ariaLabel;
+            } else if (alt) {
+              displayText = alt;
+            } else if (title) {
+              displayText = title;
+            } else if (placeholder) {
+              displayText = placeholder;
+            } else if (directText && directText.length < 100) {
+              displayText = directText;
+            } else if (allText && allText.length < 100) {
+              displayText = allText;
             }
+
+            if (displayText) {
+              description += ` "${displayText}"`;
+            }
+
+            if (href) {
+              attributes.push(`/url: ${href}`);
+            }
+
+            if (
+              type &&
+              ["email", "password", "search", "tel", "url", "number"].includes(
+                type
+              )
+            ) {
+              attributes.push(`type="${type}"`);
+            }
+
+            if (name) attributes.push(`name="${name}"`);
+            if (id) attributes.push(`id="${id}"`);
+            if (value && value.length < 50) attributes.push(`value="${value}"`);
+            if (ariaLevel) attributes.push(`level=${ariaLevel}`);
+
+            if (checked) attributes.push("checked");
+            if (selected) attributes.push("selected");
+            if (disabled) attributes.push("disabled");
+            if (required) attributes.push("required");
+
+            if (attributes.length > 0) {
+              description += ` [${attributes.join("] [")}]`;
+            }
+
+            return description;
           }
 
-          // Handle form elements
-          if (semanticRole === "textbox") {
-            if (label) elementInfo.text = label;
-            if (required)
-              elementInfo.text =
-                (elementInfo.text || "") + " Required question";
+          shouldIncludeElement(el) {
+            const tagName = el.tagName.toLowerCase();
+
+            if (this.isInteractiveElement(el)) return true;
+
+            const semanticElements = [
+              "header",
+              "nav",
+              "main",
+              "section",
+              "article",
+              "aside",
+              "footer",
+              "h1",
+              "h2",
+              "h3",
+              "h4",
+              "h5",
+              "h6",
+              "form",
+              "fieldset",
+              "legend",
+              "ul",
+              "ol",
+              "li",
+              "dl",
+              "dt",
+              "dd",
+              "table",
+              "thead",
+              "tbody",
+              "tfoot",
+              "tr",
+              "th",
+              "td",
+              "p",
+              "blockquote",
+              "pre",
+              "code",
+              "img",
+              "figure",
+              "figcaption",
+              "details",
+              "summary",
+            ];
+
+            if (semanticElements.includes(tagName)) return true;
+
+            const role = el.getAttribute("role");
+            const importantRoles = [
+              "banner",
+              "navigation",
+              "main",
+              "complementary",
+              "contentinfo",
+              "list",
+              "listitem",
+              "heading",
+              "button",
+              "link",
+              "textbox",
+              "checkbox",
+              "radio",
+              "listbox",
+              "option",
+              "menuitem",
+              "dialog",
+            ];
+
+            if (importantRoles.includes(role)) return true;
+
+            if (tagName === "div") {
+              const hasInteractiveChild = el.querySelector(
+                'button, a, input, textarea, select, [role="button"], [role="link"], [role="textbox"], [tabindex="0"]'
+              );
+              const hasTextContent = this.getDirectTextContent(el).length > 0;
+              return hasInteractiveChild || hasTextContent;
+            }
+
+            return false;
           }
 
-          // Handle links
-          if (semanticRole === "link" && href) {
-            elementInfo.url = href;
-          }
+          processElement(el, depth = 0) {
+            if (!this.isVisible(el) || depth > 10) return null;
 
-          // Handle options
-          if (semanticRole === "option") {
-            if (selected) elementInfo.attributes.selected = true;
-          }
+            const shouldInclude = this.shouldIncludeElement(el);
+            const isInteractive = this.isInteractiveElement(el);
 
-          // Handle checkboxes and radios
-          if (semanticRole === "checkbox" || semanticRole === "radio") {
-            if (checked) elementInfo.attributes.checked = true;
-          }
+            let elementInfo = null;
 
-          // Add other relevant attributes
-          if (ariaLabel) elementInfo.attributes.ariaLabel = ariaLabel;
-          if (title) elementInfo.attributes.title = title;
-          if (placeholder) elementInfo.attributes.placeholder = placeholder;
-          if (
-            value &&
-            (semanticRole === "textbox" || semanticRole === "option")
-          ) {
-            elementInfo.attributes.value = value;
-          }
-          if (alt) elementInfo.attributes.alt = alt;
-          if (required) elementInfo.attributes.required = true;
+            if (shouldInclude || isInteractive) {
+              const description = this.getElementDescription(el);
+              let ref = null;
 
-          // Process children only if depth is reasonable
-          if (depth < 8) {
+              if (isInteractive) {
+                const refNumber = this.refCounter++;
+                ref = `ref=${refNumber}`;
+                const selector = this.generateSelector(el, refNumber);
+                this.elementMap.set(refNumber.toString(), selector);
+              }
+
+              elementInfo = {
+                description: ref ? `${description} [${ref}]` : description,
+                children: [],
+                isInteractive,
+              };
+            }
+
+            const children = [];
             for (const child of el.children) {
-              const styles = window.getComputedStyle(child);
-              if (styles.display !== "none" && styles.visibility !== "hidden") {
-                const childInfo = getElementInfo(child, depth + 1);
-                // Only add child if it has meaningful content or is semantic
-                if (
-                  childInfo.ref ||
-                  childInfo.text ||
-                  childInfo.children.length > 0 ||
-                  childInfo.tagName !== "div" ||
-                  childInfo.url
-                ) {
-                  elementInfo.children.push(childInfo);
+              const childInfo = this.processElement(child, depth + 1);
+              if (childInfo) {
+                children.push(childInfo);
+              }
+            }
+
+            if (elementInfo) {
+              elementInfo.children = children;
+              return elementInfo;
+            }
+
+            return children.length === 1
+              ? children[0]
+              : children.length > 1
+              ? { description: "container", children }
+              : null;
+          }
+
+          formatHierarchy(element, indent = 0) {
+            if (!element) return "";
+
+            const indentStr = "  ".repeat(indent);
+            let result = `${indentStr}- ${element.description}`;
+
+            if (element.children && element.children.length > 0) {
+              result += ":\n";
+              for (const child of element.children) {
+                const childResult = this.formatHierarchy(child, indent + 1);
+                if (childResult.trim()) {
+                  result += childResult + "\n";
                 }
               }
+              result = result.replace(/\n$/, "");
             }
+
+            return result;
           }
 
-          // Special handling for form containers
-          if (
-            semanticRole === "form" ||
-            semanticRole === "list" ||
-            semanticRole === "listitem"
-          ) {
-            // Collapse single-child containers that don't add semantic value
-            if (
-              elementInfo.children.length === 1 &&
-              !elementInfo.text &&
-              !elementInfo.ref
-            ) {
-              const child = elementInfo.children[0];
-              if (child.tagName !== "div") {
-                return child;
-              }
-            }
-          }
+          generateHierarchy() {
+            this.elementMap.clear();
+            this.refCounter = 1;
 
-          return elementInfo;
-        };
+            const body = document.body;
+            const hierarchy = this.processElement(body, 0);
 
-        // Start from body or document element
-        const rootElement = document.body || document.documentElement;
-        return getElementInfo(rootElement);
-      });
+            const pageTitle = document.title;
+            const currentUrl = window.location.href;
 
-      // Format the hierarchy as YAML-like structure
-      const formatHierarchy = (element, indent = 0) => {
-        const spaces = "  ".repeat(indent);
-        let output = "";
+            const formattedHierarchy = this.formatHierarchy(hierarchy);
 
-        // Skip pure container elements with no meaningful content
-        if (
-          element.tagName === "div" &&
-          !element.text &&
-          !element.ref &&
-          !element.url &&
-          element.children.length === 0
-        ) {
-          return "";
-        }
-
-        // Build the element line
-        let elementLine = `${spaces}- ${element.tagName}`;
-
-        // Format description text
-        const formatDescription = (text) => {
-          if (!text) return "";
-          let formatted = text.replace(/"/g, '\\"').replace(/\s+/g, " ").trim();
-          if (formatted.length > 100) {
-            formatted = formatted.substring(0, 100) + "...";
-          }
-          return formatted;
-        };
-
-        // Add text content and description
-        const description = formatDescription(element.text);
-        if (description) {
-          elementLine += `: "${description}"`;
-        }
-
-        // Add attributes in a specific order
-        if (element.attributes.level) {
-          elementLine += ` [level=${element.attributes.level}]`;
-        }
-        // Always include ref if available, even for non-interactive elements
-        if (element.ref) {
-          elementLine += ` [ref=${element.ref}]`;
-        }
-        if (element.attributes.selected) {
-          elementLine += ` [selected]`;
-        }
-        if (element.attributes.checked) {
-          elementLine += ` [checked]`;
-        }
-        if (element.attributes.required) {
-          elementLine += ` [required]`;
-        }
-
-        // Add value or placeholder
-        if (element.attributes.placeholder) {
-          elementLine += `: "${element.attributes.placeholder}"`;
-        } else if (element.attributes.value) {
-          elementLine += `: "${element.attributes.value}"`;
-        }
-
-        output += elementLine + "\n";
-
-        // Add URL as a child element if present
-        if (element.url) {
-          output += `${spaces}  - /url: ${element.url}\n`;
-        }
-
-        // Process children
-        for (const child of element.children) {
-          const childOutput = formatHierarchy(child, indent + 1);
-          if (childOutput) {
-            output += childOutput;
-          }
-        }
-
-        return output;
-      };
-
-      const hierarchyYaml = formatHierarchy(hierarchyData);
-
-      return `- Page URL: ${currentUrl}
+            return {
+              summary: `- Page URL: ${currentUrl}
 - Page Title: ${pageTitle}
 - Page Snapshot
 \`\`\`yaml
-${hierarchyYaml}\`\`\``;
+${formattedHierarchy}
+\`\`\``,
+              elementMap: Array.from(this.elementMap.entries()),
+              hierarchy: hierarchy,
+            };
+          }
+        }
+
+        // Create instance and generate hierarchy
+        const domHierarchy = new DOMHierarchy();
+        return domHierarchy.generateHierarchy();
+      });
+
+      // Store the element map for later use by action methods
+      hierarchyData.elementMap.forEach(([ref, selector]) => {
+        this.elementMap.set(ref.toString(), selector);
+      });
+
+      // Save elementMap and hierarchy to window object for debugging/persistence
+      try {
+        await this.page.evaluate((data) => {
+          window.mcpElementMap = new Map(data.elementMap);
+          window.mcpDomHierarchy = data.hierarchy;
+          window.mcpHierarchySummary = data.summary;
+          window.mcpLastUpdated = new Date().toISOString();
+
+          // Also create a helper function to get element by ref
+          window.getMcpElement = function (ref) {
+            const selector = window.mcpElementMap.get(ref.toString());
+            if (selector) {
+              return document.querySelector(selector);
+            }
+            return null;
+          };
+
+          // Helper to get element directly by unique attribute
+          window.getMcpElementByAttr = function (ref) {
+            return document.querySelector(`[data-mcp-ref-${ref}]`);
+          };
+
+          // Helper to list all available refs
+          window.listMcpRefs = function () {
+            return Array.from(window.mcpElementMap.keys());
+          };
+
+          // Helper to list all elements with MCP attributes
+          window.listMcpElements = function () {
+            const elements = document.querySelectorAll("[data-mcp-ref-]");
+            return Array.from(elements).map((el) => {
+              const attr = Array.from(el.attributes).find((attr) =>
+                attr.name.startsWith("data-mcp-ref-")
+              );
+              const ref = attr ? attr.name.replace("data-mcp-ref-", "") : null;
+              return {
+                ref: ref,
+                element: el,
+                tagName: el.tagName,
+                textContent: el.textContent?.trim().substring(0, 50) || "",
+                selector: `[${attr.name}]`,
+              };
+            });
+          };
+
+          console.log("MCP: Saved elementMap and hierarchy to window object");
+          console.log(
+            "MCP: Available refs:",
+            Array.from(window.mcpElementMap.keys())
+          );
+          console.log(
+            "MCP: Elements are now tagged with unique data-mcp-ref-* attributes for reliable selection"
+          );
+          console.log(
+            "MCP: Use window.listMcpElements() to see detailed element information"
+          );
+        }, hierarchyData);
+      } catch (error) {
+        this.logger.debug(`Could not save to window object: ${error.message}`);
+      }
+
+      return hierarchyData.summary;
     } catch (error) {
-      this.logger.error(`Failed to summarize page hierarchy: ${error.message}`);
-      return "- Page hierarchy summary unavailable due to error";
+      this.logger.error(`Error generating page hierarchy: ${error.message}`);
+      return "Error: Could not generate page hierarchy";
     }
   }
 
@@ -843,54 +949,103 @@ ${hierarchyYaml}\`\`\``;
     try {
       if (action.startsWith("CLICK:")) {
         const elementId = action.replace("CLICK:", "").trim();
-        const element = await this.page.$(`[gbt_link_text="${elementId}"]`);
+        const selector = this.elementMap.get(elementId);
+
+        if (!selector) {
+          throw new Error(
+            `Element reference ${elementId} not found. Please run web_navigate first to generate element references.`
+          );
+        }
+
+        const element = await this.page.$(selector);
 
         if (element) {
-          await element.click();
-          this.logger.success(`Clicked element ${elementId}`);
-          await this.waitFor(2000);
+          // Store current URL to detect navigation
+          const currentUrl = this.page.url();
 
-          // Re-highlight elements after click to ensure proper element tracking
-          await this.highlightLinks();
+          await element.click();
+          this.logger.success(
+            `Clicked element ${elementId} using selector: ${selector}`
+          );
+
+          // Wait for potential navigation with timeout
+          try {
+            await Promise.race([
+              this.page.waitForNavigation({ timeout: 3000 }),
+              this.waitFor(3000),
+            ]);
+          } catch (navigationError) {
+            // Navigation timeout is fine, just continue
+            this.logger.debug(
+              `No navigation detected after click: ${navigationError.message}`
+            );
+          }
+
+          // Check if URL changed (indicating navigation)
+          const newUrl = this.page.url();
+          if (currentUrl !== newUrl) {
+            this.logger.info(`Page navigated from ${currentUrl} to ${newUrl}`);
+            // Clear element map since page changed
+            this.elementMap.clear();
+            // Clear window object data as well
+            await this.clearWindowObjectData();
+          }
 
           return { success: true, message: `Clicked element ${elementId}` };
         } else {
-          throw new Error(`Element ${elementId} not found`);
+          throw new Error(
+            `Element ${elementId} not found on page with selector: ${selector}. The element may have been removed or modified since the last page hierarchy generation.`
+          );
         }
       } else if (action.startsWith("TYPE:")) {
         const parts = action.replace("TYPE:", "").split(":");
         const elementId = parts[0].trim();
         const text = parts.slice(1).join(":").trim();
+        const selector = this.elementMap.get(elementId);
 
-        const element = await this.page.$(`[gbt_link_text="${elementId}"]`);
+        if (!selector) {
+          throw new Error(
+            `Element reference ${elementId} not found. Please run web_navigate first to generate element references.`
+          );
+        }
+
+        const element = await this.page.$(selector);
 
         if (element) {
+          // Store current URL to detect navigation
+          const currentUrl = this.page.url();
+
           await element.click();
           await element.evaluate((el) => (el.value = ""));
           await element.type(text);
-          this.logger.success(`Typed "${text}" into element ${elementId}`);
+          this.logger.success(
+            `Typed "${text}" into element ${elementId} using selector: ${selector}`
+          );
 
-          // Re-highlight elements after typing
-          await this.highlightLinks();
+          // Check if URL changed (indicating navigation)
+          const newUrl = this.page.url();
+          if (currentUrl !== newUrl) {
+            this.logger.info(`Page navigated from ${currentUrl} to ${newUrl}`);
+            // Clear element map since page changed
+            this.elementMap.clear();
+            // Clear window object data as well
+            await this.clearWindowObjectData();
+          }
 
           return {
             success: true,
             message: `Typed "${text}" into element ${elementId}`,
           };
         } else {
-          throw new Error(`Input element ${elementId} not found`);
+          throw new Error(
+            `Input element ${elementId} not found on page with selector: ${selector}. The element may have been removed or modified since the last page hierarchy generation.`
+          );
         }
       } else if (action.startsWith("FETCH:")) {
         const url = action.replace("FETCH:", "").trim();
         await this.page.goto(url, { waitUntil: "networkidle2" });
         this.logger.success(`Navigated to: ${url}`);
         await this.waitFor(2000);
-
-        // Automatically highlight elements and collect their information
-        const elementCount = await this.highlightLinks();
-
-        // Collect detailed information about all interactive elements
-        const elementsInfo = await this.collectElementsInfo();
 
         // Get page title and URL for context
         const pageTitle = await this.page.title();
@@ -902,14 +1057,10 @@ ${hierarchyYaml}\`\`\``;
           pageInfo: {
             title: pageTitle,
             url: currentUrl,
-            elementCount: elementCount,
           },
-          elements: elementsInfo,
         };
 
-        this.logger.success(
-          `Collected information for ${elementsInfo.length} interactive elements`
-        );
+        this.logger.success(`Successfully navigated to ${url}`);
         return result;
       } else if (action.startsWith("SCROLL:")) {
         const parts = action.replace("SCROLL:", "").split(":");
@@ -933,10 +1084,20 @@ ${hierarchyYaml}\`\`\``;
         const parts = action.replace("SELECT:", "").split(":");
         const elementId = parts[0].trim();
         const optionText = parts.slice(1).join(":").trim();
+        const selector = this.elementMap.get(elementId);
 
-        const element = await this.page.$(`[gbt_link_text="${elementId}"]`);
+        if (!selector) {
+          throw new Error(
+            `Element reference ${elementId} not found. Please run web_navigate first to generate element references.`
+          );
+        }
+
+        const element = await this.page.$(selector);
 
         if (element) {
+          // Store current URL to detect navigation
+          const currentUrl = this.page.url();
+
           const tagName = await element.evaluate((el) =>
             el.tagName.toLowerCase()
           );
@@ -966,6 +1127,19 @@ ${hierarchyYaml}\`\`\``;
                 `Selected "${optionText}" from dropdown ${elementId}`
               );
               await this.waitFor(1000);
+
+              // Check if URL changed (indicating navigation)
+              const newUrl = this.page.url();
+              if (currentUrl !== newUrl) {
+                this.logger.info(
+                  `Page navigated from ${currentUrl} to ${newUrl}`
+                );
+                // Clear element map since page changed
+                this.elementMap.clear();
+                // Clear window object data as well
+                await this.clearWindowObjectData();
+              }
+
               return {
                 success: true,
                 message: `Selected "${optionText}" from dropdown ${elementId}`,
@@ -1001,6 +1175,19 @@ ${hierarchyYaml}\`\`\``;
                 `Selected "${optionText}" from dropdown ${elementId}`
               );
               await this.waitFor(1000);
+
+              // Check if URL changed (indicating navigation)
+              const newUrl = this.page.url();
+              if (currentUrl !== newUrl) {
+                this.logger.info(
+                  `Page navigated from ${currentUrl} to ${newUrl}`
+                );
+                // Clear element map since page changed
+                this.elementMap.clear();
+                // Clear window object data as well
+                await this.clearWindowObjectData();
+              }
+
               return {
                 success: true,
                 message: `Selected "${optionText}" from dropdown ${elementId}`,
@@ -1012,22 +1199,44 @@ ${hierarchyYaml}\`\`\``;
             }
           }
         } else {
-          throw new Error(`Dropdown element ${elementId} not found`);
+          throw new Error(`Dropdown element ${elementId} not found on page`);
         }
       } else if (action.startsWith("HOVER:")) {
         const elementId = action.replace("HOVER:", "").trim();
-        const element = await this.page.$(`[gbt_link_text="${elementId}"]`);
+        const selector = this.elementMap.get(elementId);
+
+        if (!selector) {
+          throw new Error(
+            `Element reference ${elementId} not found. Please run web_navigate first to generate element references.`
+          );
+        }
+
+        const element = await this.page.$(selector);
 
         if (element) {
+          // Store current URL to detect navigation
+          const currentUrl = this.page.url();
+
           await element.hover();
           this.logger.success(`Hovered over element ${elementId}`);
           await this.waitFor(1000);
+
+          // Check if URL changed (indicating navigation)
+          const newUrl = this.page.url();
+          if (currentUrl !== newUrl) {
+            this.logger.info(`Page navigated from ${currentUrl} to ${newUrl}`);
+            // Clear element map since page changed
+            this.elementMap.clear();
+            // Clear window object data as well
+            await this.clearWindowObjectData();
+          }
+
           return {
             success: true,
             message: `Hovered over element ${elementId}`,
           };
         } else {
-          throw new Error(`Element ${elementId} not found for hover`);
+          throw new Error(`Element ${elementId} not found on page for hover`);
         }
       } else if (action.startsWith("PRESS:")) {
         const keySequence = action.replace("PRESS:", "").trim();
@@ -1073,21 +1282,45 @@ ${hierarchyYaml}\`\`\``;
         return { success: true, message: `Waited ${seconds} seconds` };
       } else if (action.startsWith("CLEAR:")) {
         const elementId = action.replace("CLEAR:", "").trim();
-        const element = await this.page.$(`[gbt_link_text="${elementId}"]`);
+        const selector = this.elementMap.get(elementId);
+
+        if (!selector) {
+          throw new Error(
+            `Element reference ${elementId} not found. Please run web_navigate first to generate element references.`
+          );
+        }
+
+        const element = await this.page.$(selector);
 
         if (element) {
+          // Store current URL to detect navigation
+          const currentUrl = this.page.url();
+
           await element.click();
           await this.page.keyboard.down("Control");
           await this.page.keyboard.press("a");
           await this.page.keyboard.up("Control");
           await this.page.keyboard.press("Delete");
           this.logger.success(`Cleared content from element ${elementId}`);
+
+          // Check if URL changed (indicating navigation)
+          const newUrl = this.page.url();
+          if (currentUrl !== newUrl) {
+            this.logger.info(`Page navigated from ${currentUrl} to ${newUrl}`);
+            // Clear element map since page changed
+            this.elementMap.clear();
+            // Clear window object data as well
+            await this.clearWindowObjectData();
+          }
+
           return {
             success: true,
             message: `Cleared content from element ${elementId}`,
           };
         } else {
-          throw new Error(`Element ${elementId} not found for clearing`);
+          throw new Error(
+            `Element ${elementId} not found on page for clearing`
+          );
         }
       } else if (action.startsWith("ANALYZE")) {
         // Check if Anthropic API key is configured
@@ -1184,208 +1417,21 @@ async function getWebAutomation() {
 // List available tools
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
-    tools: [
-      {
-        name: "web_navigate",
-        description:
-          "Navigate to a URL and automatically highlight all interactive elements with numbered overlays. Returns detailed information about each element including type, text content, placeholders, options, and more to help you understand what actions can be taken on the page.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            url: {
-              type: "string",
-              description:
-                "The URL to navigate to (e.g., 'https://example.com')",
-            },
-          },
-          required: ["url"],
-        },
-      },
-      {
-        name: "web_click",
-        description:
-          "Click on a web element using its highlighted number. Elements must be highlighted first using web_navigate or web_highlight_elements.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            element_id: {
-              type: "string",
-              description:
-                "The highlighted element number to click (e.g., '1', '5', '12')",
-            },
-          },
-          required: ["element_id"],
-        },
-      },
-      {
-        name: "web_type",
-        description:
-          "Type text into an input field, textarea, or other text-editable element. The element will be focused and any existing content will be cleared before typing.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            element_id: {
-              type: "string",
-              description:
-                "The highlighted element number of the input field (e.g., '3')",
-            },
-            text: {
-              type: "string",
-              description: "The text to type into the field",
-            },
-          },
-          required: ["element_id", "text"],
-        },
-      },
-      {
-        name: "web_scroll",
-        description:
-          "Scroll the page vertically to reveal more content. Useful for long pages, infinite scroll, or accessing elements outside the current viewport.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            direction: {
-              type: "string",
-              enum: ["up", "down"],
-              description: "The direction to scroll ('up' or 'down')",
-            },
-            amount: {
-              type: "number",
-              description:
-                "Optional scroll distance in pixels (default: 500, range: 1-5000)",
-              minimum: 1,
-              maximum: 5000,
-            },
-          },
-          required: ["direction"],
-        },
-      },
-      {
-        name: "web_select",
-        description:
-          "Select an option from a dropdown menu or select element. Works with both standard HTML select elements and custom dropdown implementations.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            element_id: {
-              type: "string",
-              description:
-                "The highlighted element number of the dropdown (e.g., '4')",
-            },
-            option: {
-              type: "string",
-              description:
-                "The option text or value to select (e.g., 'United States', 'option-value-123')",
-            },
-          },
-          required: ["element_id", "option"],
-        },
-      },
-      {
-        name: "web_hover",
-        description:
-          "Hover the mouse over a web element to trigger hover effects, reveal hidden menus, or show tooltips. Useful for dropdown menus and interactive elements.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            element_id: {
-              type: "string",
-              description:
-                "The highlighted element number to hover over (e.g., '7')",
-            },
-          },
-          required: ["element_id"],
-        },
-      },
-      {
-        name: "web_press_key",
-        description:
-          "Press keyboard keys or key combinations to trigger shortcuts, submit forms, navigate, or perform other keyboard-based actions.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            keys: {
-              type: "string",
-              description:
-                "The key or key combination to press. Examples: 'Enter', 'Tab', 'Escape', 'Ctrl+A', 'Shift+Tab', 'Ctrl+C', 'Ctrl+V'",
-            },
-          },
-          required: ["keys"],
-        },
-      },
-      {
-        name: "web_wait",
-        description:
-          "Pause execution for a specified time to wait for page loads, animations, or dynamic content to appear. Useful when pages need time to update after interactions.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            seconds: {
-              type: "number",
-              description:
-                "The number of seconds to wait. Supports decimals for precise timing (e.g., 1.5, 2.0, 0.5). Range: 0.1-60 seconds",
-              minimum: 0.1,
-              maximum: 60,
-            },
-          },
-          required: ["seconds"],
-        },
-      },
-      {
-        name: "web_clear",
-        description:
-          "Clear all text content from an input field, textarea, or other editable element. Equivalent to selecting all text and deleting it.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            element_id: {
-              type: "string",
-              description:
-                "The highlighted element number of the input field to clear (e.g., '2')",
-            },
-          },
-          required: ["element_id"],
-        },
-      },
-      {
-        name: "web_screenshot",
-        description:
-          "Capture a screenshot of the current page state for visual reference or debugging. The image is saved to the logs directory with a timestamp.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            filename: {
-              type: "string",
-              description:
-                "Optional custom filename for the screenshot (without extension). If not provided, a timestamp-based name will be used.",
-            },
-          },
-        },
-      },
-
-      {
-        name: "web_analyze",
-        description:
-          "Analyze the current page content using AI vision capabilities. Takes a screenshot and uses Claude to answer questions about what's visible on the page, extract information, or describe the page state.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            prompt: {
-              type: "string",
-              description:
-                "The analysis question or instruction (e.g., 'What products are shown on this page?', 'Is the login successful?', 'Extract all the prices displayed')",
-            },
-          },
-          required: ["prompt"],
-        },
-      },
-    ],
+    tools: getEnabledTools(),
   };
 });
 
 // Handle tool calls
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
+
+  // Check if the tool is enabled
+  if (TOOL_CONFIG[name] !== true) {
+    throw new McpError(
+      ErrorCode.MethodNotFound,
+      `Tool '${name}' is disabled or not found`
+    );
+  }
 
   try {
     const automation = await getWebAutomation();
@@ -1395,7 +1441,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const result = await automation.performAction(`FETCH:${args.url}`);
 
         // Get page hierarchy summary
-        const navHierarchy = await automation.summarizePageHierarchy();
+        const navHierarchy = await automation.safelyGetPageHierarchy();
 
         return {
           content: [
@@ -1410,7 +1456,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const clickResult = await automation.performAction(
           `CLICK:${args.element_id}`
         );
-        const clickHierarchy = await automation.summarizePageHierarchy();
+        const clickHierarchy = await automation.safelyGetPageHierarchy();
         return {
           content: [
             {
@@ -1424,7 +1470,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const typeResult = await automation.performAction(
           `TYPE:${args.element_id}:${args.text}`
         );
-        const typeHierarchy = await automation.summarizePageHierarchy();
+        const typeHierarchy = await automation.safelyGetPageHierarchy();
         return {
           content: [
             {
@@ -1439,7 +1485,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ? `SCROLL:${args.direction}:${args.amount}`
           : `SCROLL:${args.direction}`;
         const scrollResult = await automation.performAction(scrollAction);
-        const scrollHierarchy = await automation.summarizePageHierarchy();
+        const scrollHierarchy = await automation.safelyGetPageHierarchy();
         return {
           content: [
             {
@@ -1453,7 +1499,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const selectResult = await automation.performAction(
           `SELECT:${args.element_id}:${args.option}`
         );
-        const selectHierarchy = await automation.summarizePageHierarchy();
+        const selectHierarchy = await automation.safelyGetPageHierarchy();
         return {
           content: [
             {
@@ -1467,7 +1513,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const hoverResult = await automation.performAction(
           `HOVER:${args.element_id}`
         );
-        const hoverHierarchy = await automation.summarizePageHierarchy();
+        const hoverHierarchy = await automation.safelyGetPageHierarchy();
         return {
           content: [
             {
@@ -1481,7 +1527,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const pressResult = await automation.performAction(
           `PRESS:${args.keys}`
         );
-        const pressHierarchy = await automation.summarizePageHierarchy();
+        const pressHierarchy = await automation.safelyGetPageHierarchy();
         return {
           content: [
             {
@@ -1508,7 +1554,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const clearResult = await automation.performAction(
           `CLEAR:${args.element_id}`
         );
-        const clearHierarchy = await automation.summarizePageHierarchy();
+        const clearHierarchy = await automation.safelyGetPageHierarchy();
         return {
           content: [
             {

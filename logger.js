@@ -3,7 +3,8 @@ import path from "path";
 
 class Logger {
   constructor(options = {}) {
-    this.logFile = options.logFile || "log.txt";
+    this.logFile =
+      options.logFile === null ? null : options.logFile || "log.txt";
     this.showInTerminal = options.showInTerminal !== false; // Default to true
     this.colors = {
       reset: "\x1b[0m",
@@ -55,11 +56,15 @@ class Logger {
       },
     };
 
-    // Ensure log directory exists
-    this.ensureLogDirectory();
+    // Ensure log directory exists (only if logFile is not null)
+    if (this.logFile !== null) {
+      this.ensureLogDirectory();
+    }
   }
 
   ensureLogDirectory() {
+    if (this.logFile === null) return;
+
     const logDir = path.dirname(this.logFile);
     if (logDir !== "." && !fs.existsSync(logDir)) {
       try {
@@ -111,6 +116,8 @@ class Logger {
   }
 
   writeToFile(message) {
+    if (this.logFile === null) return; // Skip file writing when logFile is null
+
     try {
       fs.appendFileSync(this.logFile, message + "\n", "utf8");
     } catch (error) {
@@ -119,6 +126,12 @@ class Logger {
   }
 
   dumpFile(content, filename) {
+    if (this.logFile === null) {
+      // When no logFile is set, skip file dumping
+      console.error("File dumping disabled (no log file configured)");
+      return;
+    }
+
     const logDir = path.dirname(this.logFile);
     let filePath = `${logDir}/${filename}`;
 
@@ -152,8 +165,10 @@ class Logger {
         : this.showInTerminal;
     const formatted = this.formatMessage(level, message, data);
 
-    // Always write to file
-    this.writeToFile(formatted.fileMessage);
+    // Write to file only if logFile is configured
+    if (this.logFile !== null) {
+      this.writeToFile(formatted.fileMessage);
+    }
 
     // Conditionally show in terminal
     if (showInTerminal) {
@@ -209,6 +224,11 @@ class Logger {
 
   // Method to clear log file
   clearLog() {
+    if (this.logFile === null) {
+      console.error("Log clearing disabled (no log file configured)");
+      return;
+    }
+
     try {
       fs.writeFileSync(this.logFile, "", "utf8");
       this.info("Log file cleared");
@@ -219,6 +239,11 @@ class Logger {
 
   // Method to get recent logs
   getRecentLogs(lines = 50) {
+    if (this.logFile === null) {
+      console.error("Log reading disabled (no log file configured)");
+      return "";
+    }
+
     try {
       const content = fs.readFileSync(this.logFile, "utf8");
       const logLines = content.trim().split("\n");

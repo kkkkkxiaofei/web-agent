@@ -1,0 +1,64 @@
+- Page URL: https://docs.google.com/forms/d/e/1FAIpQLScmUIF_AC67QMy0LjA9TFF7slcFJjZuppoG7JBc7T_e4jOfEQ/viewform
+- Page Title: Job application form
+- Page Snapshot
+```yaml
+- document [ref=s1e2]:
+  - button "Edit this form" [ref=s1e6]:
+    - img [ref=s1e10]
+  - heading "Job application form" [level=1] [ref=s1e25]
+  - text: Lorem ipsum dolor sit amet, consectetur adipiscing elit. Curabitur quis sem odio. Sed commodo vestibulum leo, sit amet tempus odio consectetur in. Mauris dolor elit, dignissim mollis feugiat maximus, faucibus et eros. xifzhang@thoughtworks.com
+  - link "Switch account" [ref=s1e35]:
+    - /url: https://accounts.google.com/AccountChooser?continue=https://docs.google.com/forms/d/e/1FAIpQLScmUIF_AC67QMy0LjA9TFF7slcFJjZuppoG7JBc7T_e4jOfEQ/viewform&service=wise
+  - img "Your email and Google account are not part of your response" [ref=s1e37]
+  - text: Not shared
+  - list [ref=s1e44]:
+    - listitem [ref=s1e45]:
+      - heading "Name Required question" [level=3] [ref=s1e50]: Name *
+      - text: First and last name
+      - textbox "Name Required question" [ref=s1e59]
+    - listitem [ref=s1e64]:
+      - heading "Email Required question" [level=3] [ref=s1e69]: Email *
+      - textbox "Email Required question" [ref=s1e77]
+    - listitem [ref=s1e82]:
+      - heading "Phone number Required question" [level=3] [ref=s1e87]: Phone number *
+      - textbox "Phone number Required question" [ref=s1e95]
+    - listitem [ref=s1e100]:
+      - heading "Which position(s) are you interested in? Required question" [level=3] [ref=s1e105]: Which position(s) are you interested in? *
+      - list "Which position(s) are you interested in? Required question" [ref=s1e109]:
+        - listitem [ref=s1e110]:
+          - checkbox "Frontend" [ref=s1e113]
+          - text: Frontend
+        - listitem [ref=s1e123]:
+          - checkbox "Backend" [ref=s1e126]
+          - text: Backend
+        - listitem [ref=s1e136]:
+          - checkbox "Devops" [ref=s1e139]
+          - text: Devops
+        - listitem [ref=s1e149]:
+          - checkbox "Archtecture" [ref=s1e152]
+          - text: Archtecture
+    - listitem [ref=s1e162]:
+      - heading "What is your expected salary(per year)" [level=3] [ref=s1e167]
+      - listbox "What is your expected salary(per year)" [ref=s1e170]:
+        - option "Choose" [selected] [ref=s1e173]
+        - option "50K" [ref=s1e176]
+        - option "100K" [ref=s1e178]
+        - option "200K" [ref=s1e180]
+        - option "More than 200K" [ref=s1e182]
+    - listitem [ref=s1e185]:
+      - heading "What is your strength and weakness?" [level=3] [ref=s1e190]
+      - textbox "What is your strength and weakness?" [ref=s1e196]
+  - button "Submit" [ref=s1e204]
+  - button "Clear form" [ref=s1e209]
+  - text: Never submit passwords through Google Forms. This form was created inside of Thoughtworks. - Contact form owner
+  - paragraph [ref=s1e217]:
+    - text: Does this form look suspicious?
+    - link "Report" [ref=s1e218]:
+      - /url: reportabuse
+  - link "Google Forms" [ref=s1e220]:
+    - /url: //www.google.com/forms/about/?utm_source=product&utm_medium=forms_logo&utm_campaign=forms
+    - img "Google" [ref=s1e221]
+    - text: Forms
+  - button "help and feedback" [ref=s1e227]
+  - document [ref=s1e233]
+```
