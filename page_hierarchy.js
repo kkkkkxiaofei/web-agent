@@ -19,23 +19,11 @@ class PageHierarchy {
         window.listMcpElements = null;
 
         // Remove all MCP-specific attributes from elements
-        const mcpElements = document.querySelectorAll("[data-mcp-ref]");
-        mcpElements.forEach((el) => {
-          // Remove all attributes that start with 'data-mcp-ref'
-          const attributes = Array.from(el.attributes);
-          attributes.forEach((attr) => {
-            if (attr.name.startsWith("data-mcp-ref")) {
-              el.removeAttribute(attr.name);
-            }
-          });
-        });
-
-        // Also use a more comprehensive selector to catch all variants
         const allMcpElements = document.querySelectorAll("*");
         allMcpElements.forEach((el) => {
           const attributes = Array.from(el.attributes);
           attributes.forEach((attr) => {
-            if (attr.name.startsWith("data-mcp-ref-")) {
+            if (attr.name.startsWith("data-mcp-ref")) {
               el.removeAttribute(attr.name);
             }
           });
@@ -70,8 +58,8 @@ class PageHierarchy {
   async summarizePageHierarchy() {
     const hierarchy = await this.page.evaluate(() => {
       // First, clear any existing MCP attributes to prevent duplicates
-      const existingMcpElements = document.querySelectorAll("[data-mcp-ref]");
-      existingMcpElements.forEach((el) => {
+      const allElements = document.querySelectorAll("*");
+      allElements.forEach((el) => {
         const attributes = Array.from(el.attributes);
         attributes.forEach((attr) => {
           if (attr.name.startsWith("data-mcp-ref")) {
@@ -88,6 +76,13 @@ class PageHierarchy {
       function isVisible(element) {
         if (!element) return false;
         const style = window.getComputedStyle(element);
+
+        // Special case: option elements might be in collapsed dropdowns
+        // but should still be considered "visible" for our purposes
+        if (element.getAttribute("role") === "option") {
+          return style.display !== "none" && style.visibility !== "hidden";
+        }
+
         return (
           style.display !== "none" &&
           style.visibility !== "hidden" &&
@@ -131,6 +126,11 @@ class PageHierarchy {
 
         // Check for click handlers or tabindex
         if (element.onclick || element.getAttribute("tabindex") === "0") {
+          return true;
+        }
+
+        // Elements with role="option" are interactive even with tabindex="-1"
+        if (role === "option") {
           return true;
         }
 
@@ -265,6 +265,7 @@ class PageHierarchy {
       function getMetadata(element) {
         const metadata = [];
         const tagName = element.tagName.toLowerCase();
+        const role = element.getAttribute("role");
 
         // Heading level
         if (tagName.match(/^h[1-6]$/)) {
@@ -274,6 +275,14 @@ class PageHierarchy {
 
         // Selected state for options
         if (tagName === "option" && element.selected) {
+          metadata.push("selected");
+        }
+
+        // Selected state for elements with role="option" using aria-selected
+        if (
+          role === "option" &&
+          element.getAttribute("aria-selected") === "true"
+        ) {
           metadata.push("selected");
         }
 
@@ -331,6 +340,9 @@ class PageHierarchy {
         // Elements with click handlers or tabindex
         if (element.onclick || element.getAttribute("tabindex") === "0")
           return true;
+
+        // Elements with role="option" should get refs even with tabindex="-1"
+        if (role === "option") return true;
 
         return false;
       }
