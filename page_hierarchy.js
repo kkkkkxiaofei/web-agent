@@ -69,6 +69,17 @@ class PageHierarchy {
 
   async summarizePageHierarchy() {
     const hierarchy = await this.page.evaluate(() => {
+      // First, clear any existing MCP attributes to prevent duplicates
+      const existingMcpElements = document.querySelectorAll("[data-mcp-ref]");
+      existingMcpElements.forEach((el) => {
+        const attributes = Array.from(el.attributes);
+        attributes.forEach((attr) => {
+          if (attr.name.startsWith("data-mcp-ref")) {
+            el.removeAttribute(attr.name);
+          }
+        });
+      });
+
       let refCounter = 1;
       const elementMap = new Map();
       const result = [];
@@ -287,6 +298,43 @@ class PageHierarchy {
         return null;
       }
 
+      // Helper function to check if element should get a ref (only interactive elements)
+      function shouldGetRef(element) {
+        const tagName = element.tagName.toLowerCase();
+        const role = element.getAttribute("role");
+        const type = element.getAttribute("type");
+
+        // Interactive elements that should get refs
+        const interactiveElements = [
+          "button",
+          "a",
+          "input",
+          "textarea",
+          "select",
+          "option",
+        ];
+        if (interactiveElements.includes(tagName)) return true;
+
+        // Interactive roles
+        const interactiveRoles = [
+          "button",
+          "link",
+          "textbox",
+          "checkbox",
+          "radio",
+          "listbox",
+          "option",
+          "menuitem",
+        ];
+        if (role && interactiveRoles.includes(role)) return true;
+
+        // Elements with click handlers or tabindex
+        if (element.onclick || element.getAttribute("tabindex") === "0")
+          return true;
+
+        return false;
+      }
+
       // Helper function to assign reference and create selector
       function assignRef(element) {
         const ref = `s1e${refCounter++}`;
@@ -306,11 +354,16 @@ class PageHierarchy {
           return;
         }
 
-        const ref = assignRef(element);
         const elementType = getElementType(element);
         const description = getElementDescription(element);
         const metadata = getMetadata(element);
         const url = getUrl(element);
+
+        // Only assign ref to interactive elements
+        let ref = null;
+        if (shouldGetRef(element)) {
+          ref = assignRef(element);
+        }
 
         // Build the line
         const indent = "  ".repeat(depth);
@@ -325,7 +378,10 @@ class PageHierarchy {
           line += ` [${metadata.join("] [")}]`;
         }
 
-        line += ` [ref=${ref}]`;
+        // Only add ref if element got one
+        if (ref) {
+          line += ` [ref=${ref}]`;
+        }
 
         // Add colon for text content if it follows
         const tagName = element.tagName.toLowerCase();
@@ -366,7 +422,7 @@ class PageHierarchy {
       // Start processing from document
       result.push("- Page Snapshot");
 
-      // Add document wrapper
+      // Add document wrapper - document always gets a ref as it's the root container
       const documentRef = assignRef(document.documentElement);
       result.push(`- document [ref=${documentRef}]:`);
 
