@@ -9,9 +9,9 @@ import {
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
 
-import { getEnabledTools, TOOL_CONFIG } from "./tools.js";
-import { handleToolExecution } from "./tool_handlers.js";
-import WebAutomationMCPServer from "./automation_server.js";
+import { getEnabledTools, TOOL_CONFIG } from "./src/tools.js";
+import { handleToolExecution } from "./src/tool_handlers.js";
+import WebAutomationMCPServer from "./src/automation_server.js";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
