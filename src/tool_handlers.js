@@ -180,8 +180,8 @@ async function handleToolExecution(name, args, automation) {
 }
 
 /**
- * Perform web automation actions
- * @param {object} automation - The automation instance containing page, logger, etc.
+ * Perform web automation actions using PuppeteerManager
+ * @param {object} automation - The automation instance containing puppeteerManager, logger, etc.
  * @param {string} action - The action to perform
  * @returns {Promise<object>} - The result of the action
  */
@@ -205,32 +205,17 @@ async function performAction(automation, action) {
         );
       }
 
-      const element = await automation.page.$(selector);
+      // Store current URL to detect navigation
+      const currentUrl = automation.puppeteerManager.getCurrentUrl();
 
-      if (element) {
-        // Store current URL to detect navigation
-        const currentUrl = automation.page.url();
-
-        await element.click();
+      try {
+        const result = await automation.puppeteerManager.clickElement(selector);
         automation.logger.success(
           `Clicked element ${elementId} using selector: ${selector}`
         );
 
-        // Wait for potential navigation with timeout
-        try {
-          await Promise.race([
-            automation.page.waitForNavigation({ timeout: 3000 }),
-            automation.waitFor(3000),
-          ]);
-        } catch (navigationError) {
-          // Navigation timeout is fine, just continue
-          automation.logger.debug(
-            `No navigation detected after click: ${navigationError.message}`
-          );
-        }
-
         // Check if URL changed (indicating navigation)
-        const newUrl = automation.page.url();
+        const newUrl = automation.puppeteerManager.getCurrentUrl();
         if (currentUrl !== newUrl) {
           automation.logger.info(
             `Page navigated from ${currentUrl} to ${newUrl}`
@@ -242,7 +227,7 @@ async function performAction(automation, action) {
         }
 
         return { success: true, message: `Clicked element ${elementId}` };
-      } else {
+      } catch (error) {
         throw new Error(
           `Element ${elementId} not found on page with selector: ${selector}. The element may have been removed or modified since the last page hierarchy generation.`
         );
@@ -259,21 +244,20 @@ async function performAction(automation, action) {
         );
       }
 
-      const element = await automation.page.$(selector);
+      // Store current URL to detect navigation
+      const currentUrl = automation.puppeteerManager.getCurrentUrl();
 
-      if (element) {
-        // Store current URL to detect navigation
-        const currentUrl = automation.page.url();
-
-        await element.click();
-        await element.evaluate((el) => (el.value = ""));
-        await element.type(text);
+      try {
+        const result = await automation.puppeteerManager.typeIntoElement(
+          selector,
+          text
+        );
         automation.logger.success(
           `Typed "${text}" into element ${elementId} using selector: ${selector}`
         );
 
         // Check if URL changed (indicating navigation)
-        const newUrl = automation.page.url();
+        const newUrl = automation.puppeteerManager.getCurrentUrl();
         if (currentUrl !== newUrl) {
           automation.logger.info(
             `Page navigated from ${currentUrl} to ${newUrl}`
@@ -288,50 +272,37 @@ async function performAction(automation, action) {
           success: true,
           message: `Typed "${text}" into element ${elementId}`,
         };
-      } else {
+      } catch (error) {
         throw new Error(
           `Input element ${elementId} not found on page with selector: ${selector}. The element may have been removed or modified since the last page hierarchy generation.`
         );
       }
     } else if (action.startsWith("FETCH:")) {
       const url = action.replace("FETCH:", "").trim();
-      await automation.page.goto(url, { waitUntil: "networkidle2" });
+      const result = await automation.puppeteerManager.navigateToUrl(url);
       automation.logger.success(`Navigated to: ${url}`);
       await automation.waitFor(2000);
 
-      // Get page title and URL for context
-      const pageTitle = await automation.page.title();
-      const currentUrl = automation.page.url();
-
-      const result = {
+      return {
         success: true,
         message: `Navigated to: ${url}`,
         pageInfo: {
-          title: pageTitle,
-          url: currentUrl,
+          title: result.title,
+          url: result.url,
         },
       };
-
-      automation.logger.success(`Successfully navigated to ${url}`);
-      return result;
     } else if (action.startsWith("SCROLL:")) {
       const parts = action.replace("SCROLL:", "").split(":");
       const direction = parts[0].trim().toLowerCase();
       const customAmount = parts[1] ? parseInt(parts[1].trim()) : 500;
-      const scrollAmount = direction === "up" ? -customAmount : customAmount;
 
-      await automation.page.evaluate((amount) => {
-        window.scrollBy(0, amount);
-      }, scrollAmount);
-
-      automation.logger.success(
-        `Scrolled ${direction} by ${Math.abs(scrollAmount)} pixels`
+      const result = await automation.puppeteerManager.scrollPage(
+        direction,
+        customAmount
       );
+      automation.logger.success(result.message);
       await automation.waitFor(1000);
-      return {
-        success: true,
-        message: `Scrolled ${direction} by ${Math.abs(scrollAmount)} pixels`,
-      };
+      return result;
     } else if (action.startsWith("SELECT:")) {
       const parts = action.replace("SELECT:", "").split(":");
       const elementId = parts[0].trim();
@@ -344,107 +315,33 @@ async function performAction(automation, action) {
         );
       }
 
-      const element = await automation.page.$(selector);
+      // Store current URL to detect navigation
+      const currentUrl = automation.puppeteerManager.getCurrentUrl();
 
-      if (element) {
-        // Store current URL to detect navigation
-        const currentUrl = automation.page.url();
-
-        const tagName = await element.evaluate((el) =>
-          el.tagName.toLowerCase()
+      try {
+        const result = await automation.puppeteerManager.selectOption(
+          selector,
+          optionText
         );
+        automation.logger.success(result.message);
 
-        if (tagName === "select") {
-          const optionSelected = await element.evaluate((selectEl, text) => {
-            const options = Array.from(selectEl.options);
-            const targetOption = options.find(
-              (option) =>
-                option.text.trim().toLowerCase().includes(text.toLowerCase()) ||
-                option.value.toLowerCase().includes(text.toLowerCase())
-            );
-
-            if (targetOption) {
-              selectEl.value = targetOption.value;
-              selectEl.dispatchEvent(new Event("change", { bubbles: true }));
-              return true;
-            }
-            return false;
-          }, optionText);
-
-          if (optionSelected) {
-            automation.logger.success(
-              `Selected "${optionText}" from dropdown ${elementId}`
-            );
-            await automation.waitFor(1000);
-
-            // Check if URL changed (indicating navigation)
-            const newUrl = automation.page.url();
-            if (currentUrl !== newUrl) {
-              automation.logger.info(
-                `Page navigated from ${currentUrl} to ${newUrl}`
-              );
-              // Clear element map since page changed
-              automation.elementMap.clear();
-              // Clear window object data as well
-              await automation.pageHierarchy.clearWindowObjectData();
-            }
-
-            return {
-              success: true,
-              message: `Selected "${optionText}" from dropdown ${elementId}`,
-            };
-          } else {
-            throw new Error(
-              `Option "${optionText}" not found in dropdown ${elementId}`
-            );
-          }
-        } else {
-          await element.click();
-          await automation.waitFor(500);
-
-          const optionClicked = await automation.page.evaluate((text) => {
-            const elements = document.querySelectorAll("*");
-            for (const el of elements) {
-              if (
-                el.textContent &&
-                el.textContent.trim().toLowerCase().includes(text.toLowerCase())
-              ) {
-                el.click();
-                return true;
-              }
-            }
-            return false;
-          }, optionText);
-
-          if (optionClicked) {
-            automation.logger.success(
-              `Selected "${optionText}" from dropdown ${elementId}`
-            );
-            await automation.waitFor(1000);
-
-            // Check if URL changed (indicating navigation)
-            const newUrl = automation.page.url();
-            if (currentUrl !== newUrl) {
-              automation.logger.info(
-                `Page navigated from ${currentUrl} to ${newUrl}`
-              );
-              // Clear element map since page changed
-              automation.elementMap.clear();
-              // Clear window object data as well
-              await automation.pageHierarchy.clearWindowObjectData();
-            }
-
-            return {
-              success: true,
-              message: `Selected "${optionText}" from dropdown ${elementId}`,
-            };
-          } else {
-            throw new Error(
-              `Could not select "${optionText}" from dropdown ${elementId}`
-            );
-          }
+        // Check if URL changed (indicating navigation)
+        const newUrl = automation.puppeteerManager.getCurrentUrl();
+        if (currentUrl !== newUrl) {
+          automation.logger.info(
+            `Page navigated from ${currentUrl} to ${newUrl}`
+          );
+          // Clear element map since page changed
+          automation.elementMap.clear();
+          // Clear window object data as well
+          await automation.pageHierarchy.clearWindowObjectData();
         }
-      } else {
+
+        return {
+          success: true,
+          message: `Selected "${optionText}" from dropdown ${elementId}`,
+        };
+      } catch (error) {
         throw new Error(`Dropdown element ${elementId} not found on page`);
       }
     } else if (action.startsWith("HOVER:")) {
@@ -457,18 +354,15 @@ async function performAction(automation, action) {
         );
       }
 
-      const element = await automation.page.$(selector);
+      // Store current URL to detect navigation
+      const currentUrl = automation.puppeteerManager.getCurrentUrl();
 
-      if (element) {
-        // Store current URL to detect navigation
-        const currentUrl = automation.page.url();
-
-        await element.hover();
+      try {
+        const result = await automation.puppeteerManager.hoverElement(selector);
         automation.logger.success(`Hovered over element ${elementId}`);
-        await automation.waitFor(1000);
 
         // Check if URL changed (indicating navigation)
-        const newUrl = automation.page.url();
+        const newUrl = automation.puppeteerManager.getCurrentUrl();
         if (currentUrl !== newUrl) {
           automation.logger.info(
             `Page navigated from ${currentUrl} to ${newUrl}`
@@ -483,40 +377,15 @@ async function performAction(automation, action) {
           success: true,
           message: `Hovered over element ${elementId}`,
         };
-      } else {
+      } catch (error) {
         throw new Error(`Element ${elementId} not found on page for hover`);
       }
     } else if (action.startsWith("PRESS:")) {
       const keySequence = action.replace("PRESS:", "").trim();
 
-      if (keySequence.includes("+")) {
-        const keys = keySequence.split("+");
-        const modifiers = keys.slice(0, -1);
-        const mainKey = keys[keys.length - 1];
-
-        const options = {};
-        if (modifiers.includes("Ctrl") || modifiers.includes("Control")) {
-          options.ctrlKey = true;
-        }
-        if (modifiers.includes("Shift")) {
-          options.shiftKey = true;
-        }
-        if (modifiers.includes("Alt")) {
-          options.altKey = true;
-        }
-        if (modifiers.includes("Meta") || modifiers.includes("Cmd")) {
-          options.metaKey = true;
-        }
-
-        await automation.page.keyboard.press(mainKey, options);
-        automation.logger.success(`Pressed key combination: ${keySequence}`);
-      } else {
-        await automation.page.keyboard.press(keySequence);
-        automation.logger.success(`Pressed key: ${keySequence}`);
-      }
-
-      await automation.waitFor(500);
-      return { success: true, message: `Pressed key: ${keySequence}` };
+      const result = await automation.puppeteerManager.pressKeys(keySequence);
+      automation.logger.success(result.message);
+      return result;
     } else if (action.startsWith("WAIT:")) {
       const seconds = parseFloat(action.replace("WAIT:", "").trim());
 
@@ -538,21 +407,15 @@ async function performAction(automation, action) {
         );
       }
 
-      const element = await automation.page.$(selector);
+      // Store current URL to detect navigation
+      const currentUrl = automation.puppeteerManager.getCurrentUrl();
 
-      if (element) {
-        // Store current URL to detect navigation
-        const currentUrl = automation.page.url();
-
-        await element.click();
-        await automation.page.keyboard.down("Control");
-        await automation.page.keyboard.press("a");
-        await automation.page.keyboard.up("Control");
-        await automation.page.keyboard.press("Delete");
+      try {
+        const result = await automation.puppeteerManager.clearElement(selector);
         automation.logger.success(`Cleared content from element ${elementId}`);
 
         // Check if URL changed (indicating navigation)
-        const newUrl = automation.page.url();
+        const newUrl = automation.puppeteerManager.getCurrentUrl();
         if (currentUrl !== newUrl) {
           automation.logger.info(
             `Page navigated from ${currentUrl} to ${newUrl}`
@@ -567,7 +430,7 @@ async function performAction(automation, action) {
           success: true,
           message: `Cleared content from element ${elementId}`,
         };
-      } else {
+      } catch (error) {
         throw new Error(`Element ${elementId} not found on page for clearing`);
       }
     } else if (action.startsWith("ANALYZE")) {
