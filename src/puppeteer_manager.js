@@ -1,6 +1,7 @@
 import puppeteer from "puppeteer";
 import fs from "fs";
 import path from "path";
+import os from "os";
 
 /**
  * PuppeteerManager - Encapsulates all Puppeteer-related functionality
@@ -14,6 +15,7 @@ class PuppeteerManager {
     this.isInitialized = false;
     this.initializationError = null;
     this.initializationPromise = null;
+    this.connectedToExisting = false; // Track if we connected to existing browser
 
     // Configuration options
     this.options = {
@@ -24,8 +26,244 @@ class PuppeteerManager {
         height: 800,
         deviceScaleFactor: 1,
       },
+
+      // New options for existing Chrome connection
+      connectToExisting: options.connectToExisting !== false, // Default: try to connect
+      remoteDebuggingPort: options.remoteDebuggingPort || 9222,
+      userDataDir: options.userDataDir || null, // Path to Chrome profile
+      autoDetectChrome: options.autoDetectChrome !== false, // Auto-detect running Chrome
+      executablePath: options.executablePath || null, // Custom Chrome path
+
       ...options,
     };
+  }
+
+  /**
+   * Get default Chrome user data directory for the current OS
+   */
+  getDefaultChromeUserDataDir() {
+    const platform = os.platform();
+    const homeDir = os.homedir();
+
+    switch (platform) {
+      case "darwin": // macOS
+        return path.join(homeDir, "Library/Application Support/Google/Chrome");
+      case "win32": // Windows
+        return path.join(homeDir, "AppData/Local/Google/Chrome/User Data");
+      case "linux": // Linux
+        return path.join(homeDir, ".config/google-chrome");
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Find Chrome executable path
+   */
+  findChromeExecutable() {
+    const platform = os.platform();
+    const possiblePaths = [];
+
+    switch (platform) {
+      case "darwin": // macOS
+        possiblePaths.push(
+          "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+          "/Applications/Chromium.app/Contents/MacOS/Chromium"
+        );
+        break;
+      case "win32": // Windows
+        possiblePaths.push(
+          "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+          "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+          path.join(
+            os.homedir(),
+            "AppData\\Local\\Google\\Chrome\\Application\\chrome.exe"
+          )
+        );
+        break;
+      case "linux": // Linux
+        possiblePaths.push(
+          "/usr/bin/google-chrome",
+          "/usr/bin/google-chrome-stable",
+          "/usr/bin/chromium",
+          "/usr/bin/chromium-browser"
+        );
+        break;
+    }
+
+    for (const chromePath of possiblePaths) {
+      if (fs.existsSync(chromePath)) {
+        return chromePath;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Check if Chrome is running with remote debugging
+   */
+  async checkExistingChrome() {
+    try {
+      const response = await fetch(
+        `http://localhost:${this.options.remoteDebuggingPort}/json/version`
+      );
+      if (response.ok) {
+        const data = await response.json();
+        console.log(`Found existing Chrome: ${data.Browser}`);
+        return true;
+      }
+    } catch (error) {
+      // Chrome not running with remote debugging
+    }
+    return false;
+  }
+
+  /**
+   * Try to connect to existing Chrome instance
+   */
+  async connectToExistingChrome() {
+    try {
+      // Method 1: Try connecting with browserURL (simpler)
+      const browserURL = `http://localhost:${this.options.remoteDebuggingPort}`;
+
+      console.log(`Attempting to connect to Chrome at ${browserURL}`);
+
+      this.browser = await puppeteer.connect({
+        browserURL,
+        defaultViewport: null,
+      });
+
+      console.log(
+        `✅ Connected to existing Chrome on port ${this.options.remoteDebuggingPort}`
+      );
+      this.connectedToExisting = true;
+      return true;
+    } catch (error) {
+      console.log(`Method 1 failed: ${error.message}`);
+
+      // Method 2: Try getting WebSocket endpoint manually
+      try {
+        const response = await fetch(
+          `http://localhost:${this.options.remoteDebuggingPort}/json`
+        );
+        const targets = await response.json();
+
+        // Find a browser target
+        const browserTarget = targets.find(
+          (target) => target.type === "browser"
+        );
+        if (browserTarget && browserTarget.webSocketDebuggerUrl) {
+          console.log(
+            `Trying WebSocket endpoint: ${browserTarget.webSocketDebuggerUrl}`
+          );
+
+          this.browser = await puppeteer.connect({
+            browserWSEndpoint: browserTarget.webSocketDebuggerUrl,
+            defaultViewport: null,
+          });
+
+          console.log(`✅ Connected to existing Chrome via WebSocket`);
+          this.connectedToExisting = true;
+          return true;
+        } else {
+          console.log("No suitable browser target found");
+        }
+      } catch (wsError) {
+        console.log(`Method 2 failed: ${wsError.message}`);
+      }
+
+      console.log(`Could not connect to existing Chrome: All methods failed`);
+      return false;
+    }
+  }
+
+  /**
+   * Launch Chrome with user profile
+   */
+  async launchWithProfile() {
+    const userDataDir =
+      this.options.userDataDir || this.getDefaultChromeUserDataDir();
+
+    if (!userDataDir || !fs.existsSync(userDataDir)) {
+      throw new Error(`Chrome user data directory not found: ${userDataDir}`);
+    }
+
+    const browserOptions = {
+      headless: this.options.headless,
+      userDataDir: userDataDir,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-web-security",
+        "--disable-features=IsolateOrigins,site-per-process",
+        "--disable-site-isolation-trials",
+        "--disable-features=BlockInsecurePrivateNetworkRequests",
+        "--allow-running-insecure-content",
+        "--disable-features=SameSiteByDefaultCookies,CookiesWithoutSameSiteMustBeSecure",
+        "--disable-features=IsolateOrigins",
+        "--disable-features=OutOfBlinkCors",
+        "--disable-features=CrossOriginOpenerPolicy",
+        "--disable-features=CrossOriginEmbedderPolicy",
+        "--disable-features=CrossOriginResourcePolicy",
+        "--start-maximized",
+        `--remote-debugging-port=${this.options.remoteDebuggingPort}`,
+      ],
+      ignoreHTTPSErrors: true,
+      defaultViewport: null,
+      timeout: this.options.timeout,
+    };
+
+    // Add executable path if specified
+    if (this.options.executablePath) {
+      browserOptions.executablePath = this.options.executablePath;
+    } else {
+      const chromePath = this.findChromeExecutable();
+      if (chromePath) {
+        browserOptions.executablePath = chromePath;
+      }
+    }
+
+    console.log(`Launching Chrome with profile: ${userDataDir}`);
+    this.browser = await puppeteer.launch(browserOptions);
+    return true;
+  }
+
+  /**
+   * Launch new Chrome instance (fallback)
+   */
+  async launchNewChrome() {
+    const browserOptions = {
+      headless: this.options.headless,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-web-security",
+        "--disable-features=IsolateOrigins,site-per-process",
+        "--disable-site-isolation-trials",
+        "--disable-features=BlockInsecurePrivateNetworkRequests",
+        "--allow-running-insecure-content",
+        "--disable-features=SameSiteByDefaultCookies,CookiesWithoutSameSiteMustBeSecure",
+        "--disable-features=IsolateOrigins",
+        "--disable-features=OutOfBlinkCors",
+        "--disable-features=CrossOriginOpenerPolicy",
+        "--disable-features=CrossOriginEmbedderPolicy",
+        "--disable-features=CrossOriginResourcePolicy",
+        "--start-maximized",
+        `--remote-debugging-port=${this.options.remoteDebuggingPort}`,
+      ],
+      ignoreHTTPSErrors: true,
+      defaultViewport: null,
+      timeout: this.options.timeout,
+    };
+
+    // Add executable path if specified
+    if (this.options.executablePath) {
+      browserOptions.executablePath = this.options.executablePath;
+    }
+
+    console.log("Launching new Chrome instance");
+    this.browser = await puppeteer.launch(browserOptions);
+    return true;
   }
 
   /**
@@ -62,47 +300,60 @@ class PuppeteerManager {
    */
   async _doInitialize() {
     try {
-      // Browser launch configuration
-      const browserOptions = {
-        headless: this.options.headless,
-        args: [
-          "--no-sandbox",
-          "--disable-setuid-sandbox",
-          "--disable-web-security",
-          "--disable-features=IsolateOrigins,site-per-process",
-          "--disable-site-isolation-trials",
-          "--disable-features=BlockInsecurePrivateNetworkRequests",
-          "--allow-running-insecure-content",
-          "--disable-features=SameSiteByDefaultCookies,CookiesWithoutSameSiteMustBeSecure",
-          "--disable-features=IsolateOrigins",
-          "--disable-features=OutOfBlinkCors",
-          "--disable-features=CrossOriginOpenerPolicy",
-          "--disable-features=CrossOriginEmbedderPolicy",
-          "--disable-features=CrossOriginResourcePolicy",
-          "--start-maximized",
-        ],
-        ignoreHTTPSErrors: true,
-        defaultViewport: null,
-        timeout: this.options.timeout,
-      };
+      let connected = false;
 
-      // Launch browser with timeout
-      const browserPromise = puppeteer.launch(browserOptions);
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(
-          () =>
-            reject(
-              new Error(
-                `Browser launch timeout after ${
-                  this.options.timeout / 1000
-                } seconds`
-              )
-            ),
-          this.options.timeout
+      // Strategy 1: Try to connect to existing Chrome with remote debugging
+      if (this.options.connectToExisting && this.options.autoDetectChrome) {
+        console.log("🔍 Strategy 1: Checking for existing Chrome instance...");
+        const hasExistingChrome = await this.checkExistingChrome();
+        if (hasExistingChrome) {
+          console.log("📡 Attempting to connect to existing Chrome...");
+          connected = await this.connectToExistingChrome();
+        } else {
+          console.log("❌ No existing Chrome found with remote debugging");
+        }
+      }
+
+      // Strategy 2: Launch with user profile
+      if (!connected && this.options.userDataDir) {
+        console.log(
+          "🔍 Strategy 2: Launching Chrome with specified profile..."
         );
-      });
+        try {
+          connected = await this.launchWithProfile();
+        } catch (error) {
+          console.log(`Failed to launch with profile: ${error.message}`);
+        }
+      }
 
-      this.browser = await Promise.race([browserPromise, timeoutPromise]);
+      // Strategy 3: Try to use default Chrome profile
+      if (
+        !connected &&
+        !this.options.userDataDir &&
+        this.options.connectToExisting
+      ) {
+        console.log("🔍 Strategy 3: Launching Chrome with default profile...");
+        try {
+          this.options.userDataDir = this.getDefaultChromeUserDataDir();
+          connected = await this.launchWithProfile();
+        } catch (error) {
+          console.log(
+            `Failed to launch with default profile: ${error.message}`
+          );
+        }
+      }
+
+      // Strategy 4: Launch new Chrome instance (fallback)
+      if (!connected) {
+        console.log(
+          "🔍 Strategy 4: Launching new Chrome instance (fallback)..."
+        );
+        connected = await this.launchNewChrome();
+      }
+
+      if (!connected) {
+        throw new Error("Failed to initialize browser with any method");
+      }
 
       // Get or create page
       const pages = await this.browser.pages();
@@ -112,7 +363,18 @@ class PuppeteerManager {
       await this._configurePage();
 
       this.isInitialized = true;
-      console.log("Puppeteer browser initialized successfully");
+
+      if (this.connectedToExisting) {
+        console.log(
+          "✅ Connected to existing Chrome browser with your profile and sessions!"
+        );
+      } else if (this.options.userDataDir) {
+        console.log(
+          "✅ Launched Chrome with your profile - your bookmarks and extensions should be available!"
+        );
+      } else {
+        console.log("✅ Launched new Chrome instance");
+      }
     } catch (error) {
       console.error(`Failed to initialize Puppeteer: ${error.message}`);
       await this._cleanup();

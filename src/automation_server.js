@@ -5,16 +5,29 @@ import PageHierarchy from "./page_hierarchy.js";
 import PuppeteerManager from "./puppeteer_manager.js";
 
 class WebAutomationMCPServer {
-  constructor() {
+  constructor(options = {}) {
     this.logger = new Logger({ logFile: null, showInTerminal: false }); // Console-only logging for MCP
     this.anthropicClient = new AnthropicClient(this.logger);
     this.pageHierarchy = null; // Will be initialized after page is ready
 
-    // Initialize PuppeteerManager with appropriate options
+    // Initialize PuppeteerManager with Chrome profile options
     this.puppeteerManager = new PuppeteerManager({
-      headless: false,
-      timeout: 30000,
-      viewport: { width: 1280, height: 800, deviceScaleFactor: 1 },
+      headless: options.headless || false,
+      timeout: options.timeout || 30000,
+      viewport: options.viewport || {
+        width: 1280,
+        height: 800,
+        deviceScaleFactor: 1,
+      },
+
+      // Chrome profile and connection options
+      connectToExisting: options.connectToExisting !== false, // Default: try to connect
+      userDataDir: options.userDataDir || null, // Use specific Chrome profile
+      remoteDebuggingPort: options.remoteDebuggingPort || 9222,
+      autoDetectChrome: options.autoDetectChrome !== false,
+      executablePath: options.executablePath || null,
+
+      ...options,
     });
 
     // Expose properties for backward compatibility with tool_handlers.js
