@@ -8,7 +8,7 @@ const TOOL_CONFIG = {
   web_scroll: true, // Scroll page up/down
   web_select: true, // Select dropdown options
   web_hover: false, // Hover over elements
-  web_press_key: false, // Press keyboard keys
+  web_press_key: true, // Press keyboard keys
   web_wait: true, // Wait for specified time
   web_clear: false, // Clear input fields
   web_screenshot: true, // Take screenshots
