@@ -4,10 +4,7 @@
   "description": "AI-powered web browser agent using Puppeteer and GPT-4V",
   "main": "web_agent.js",
   "scripts": {
-    "start": "node web_agent.js",
-    "screenshot": "node screenshot.js",
-    "vision": "python vision_scraper.py",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node web_agent.js"
   },
   "keywords": [
     "puppeteer",
