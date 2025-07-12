@@ -1,0 +1,9 @@
+node_modules
+.env
+.venv
+puppeteer_data
+log.txt
+web_agent.log
+current_page.png
+logs/*
+.DS_Store
