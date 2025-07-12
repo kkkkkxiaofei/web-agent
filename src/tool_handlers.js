@@ -150,12 +150,17 @@ async function handleToolExecution(name, args, automation) {
 
     case "web_screenshot":
       const filename = args.filename || "screenshot.jpg";
-      const screenshotPath = await automation.takeScreenshot(filename);
+      const screenshotResult = await automation.takeScreenshot(filename, true); // Request base64
       return {
         content: [
           {
             type: "text",
-            text: `Screenshot saved to: ${screenshotPath}`,
+            text: `Screenshot captured (${screenshotResult.size} bytes)`,
+          },
+          {
+            type: "image",
+            data: screenshotResult.base64,
+            mimeType: screenshotResult.mimeType,
           },
         ],
       };
@@ -443,7 +448,8 @@ async function performAction(automation, action) {
 
       const analysisPrompt = action.replace("ANALYZE:", "").trim();
       const screenshotPath = await automation.takeScreenshot(
-        `analyze-${Date.now()}.jpg`
+        `analyze-${Date.now()}.jpg`,
+        false // Save to file for analysis
       );
 
       try {

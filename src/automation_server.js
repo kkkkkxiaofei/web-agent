@@ -79,43 +79,30 @@ class WebAutomationMCPServer {
     }
   }
 
-  async takeScreenshot(filename) {
+  async takeScreenshot(filename, returnBase64 = true) {
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    let customFilename = `mcp-${timestamp}-${filename}`;
-
-    // Try to ensure logs directory exists, but fallback if file system is read-only
-    try {
-      if (!fs.existsSync("logs")) {
-        fs.mkdirSync("logs", { recursive: true });
-      }
-      customFilename = `logs/${customFilename}`;
-    } catch (error) {
-      this.logger.error(`Could not create logs directory: ${error.message}`);
-      // Fallback to temp directory or current directory
-      const os = await import("os");
-      try {
-        const tempDir = os.tmpdir();
-        customFilename = `${tempDir}/${customFilename}`;
-        this.logger.info(`Using temp directory path: ${customFilename}`);
-      } catch (tempError) {
-        // Final fallback to current directory
-        this.logger.info(
-          `Using current directory fallback path: ${customFilename}`
-        );
-      }
-    }
+    const customFilename = `mcp-${timestamp}-${filename}`;
 
     try {
       // Use PuppeteerManager's screenshot method
-      const filePath = await this.puppeteerManager.takeScreenshot(
+      const result = await this.puppeteerManager.takeScreenshot(
         customFilename,
         {
           fullPage: false,
           quality: 90,
+          returnBase64: returnBase64,
         }
       );
-      this.logger.debug(`Screenshot saved as ${filePath}`);
-      return filePath;
+
+      if (returnBase64) {
+        this.logger.debug(
+          `Screenshot captured as base64 (${result.size} bytes)`
+        );
+        return result;
+      } else {
+        this.logger.debug(`Screenshot saved as ${result}`);
+        return result;
+      }
     } catch (error) {
       throw new Error(`Failed to take screenshot: ${error.message}`);
     }

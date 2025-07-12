@@ -725,37 +725,83 @@ class PuppeteerManager {
 
   /**
    * Take a screenshot
-   * @param {string} filename - Optional filename
+   * @param {string} filename - Optional filename (used for saving to file)
    * @param {object} options - Screenshot options
-   * @returns {Promise<string>} Path to the screenshot file
+   * @returns {Promise<string|object>} Base64 string or file path, depending on returnBase64 option
    */
   async takeScreenshot(filename, options = {}) {
     await this.initialize();
 
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const screenshotName = filename || `screenshot-${timestamp}.jpg`;
-    let filePath = path.join("screenshots", screenshotName);
-
-    // Ensure screenshots directory exists
-    const screenshotsDir = "screenshots";
-    if (!fs.existsSync(screenshotsDir)) {
-      try {
-        fs.mkdirSync(screenshotsDir, { recursive: true });
-      } catch (error) {
-        // Fallback to current directory
-        filePath = screenshotName;
-      }
-    }
+    const imageType = options.type || "jpeg";
+    const returnBase64 = options.returnBase64;
 
     try {
-      await this.page.screenshot({
-        path: filePath,
-        fullPage: options.fullPage || false,
-        quality: options.quality || 90,
-        ...options,
-      });
+      // Ensure page is ready
+      if (!this.page) {
+        throw new Error("Browser page not initialized");
+      }
 
-      return filePath;
+      // Always save to file first
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const screenshotName = filename || `screenshot-${timestamp}.${imageType}`;
+      let filePath = path.join("screenshots", screenshotName);
+
+      // Ensure screenshots directory exists
+      const screenshotsDir = "screenshots";
+      if (!fs.existsSync(screenshotsDir)) {
+        try {
+          fs.mkdirSync(screenshotsDir, { recursive: true });
+        } catch (error) {
+          // Fallback to current directory
+          filePath = screenshotName;
+        }
+      }
+
+      // Prepare screenshot options
+      const screenshotOptions = {
+        path: filePath,
+        type: imageType,
+        fullPage: options.fullPage || false,
+      };
+
+      // Only add quality for JPEG
+      if (imageType === "jpeg") {
+        screenshotOptions.quality = options.quality || 90;
+      }
+
+      // Add clip if specified
+      if (options.clip) {
+        screenshotOptions.clip = options.clip;
+      }
+
+      // Take the screenshot and save to file
+      await this.page.screenshot(screenshotOptions);
+
+      // If base64 is requested, read the file and convert
+      if (returnBase64) {
+        try {
+          const fileBuffer = fs.readFileSync(filePath);
+          const base64Data = fileBuffer.toString("base64");
+
+          if (!base64Data || base64Data.length === 0) {
+            throw new Error("Failed to encode screenshot as base64");
+          }
+
+          return {
+            base64: base64Data,
+            mimeType: `image/${imageType}`,
+            size: fileBuffer.length,
+            filePath: filePath, // Include file path for reference
+          };
+        } catch (readError) {
+          throw new Error(
+            `Failed to read screenshot file for base64 conversion: ${readError.message}`
+          );
+        }
+      } else {
+        // Return file path
+        return filePath;
+      }
     } catch (error) {
       throw new Error(`Failed to take screenshot: ${error.message}`);
     }
