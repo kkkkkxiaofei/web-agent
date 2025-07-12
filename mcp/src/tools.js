@@ -6,7 +6,7 @@ const TOOL_CONFIG = {
   web_click: true, // Click on elements
   web_type: true, // Type text into inputs
   web_scroll: true, // Scroll page up/down
-  web_select: true, // Select dropdown options
+  web_select: false, // Select dropdown options
   web_hover: false, // Hover over elements
   web_press_key: true, // Press keyboard keys
   web_wait: true, // Wait for specified time

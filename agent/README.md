@@ -109,7 +109,7 @@ AI: The pricing is as follows: ...
 
 ## Puppeteer restriction
 
-By default, the agent will launch a new instance of puppeteer browser for each task without user profiles, which means It can't access any pages that requires user login.
+By default, the agent will launch a new instance of Chromium Puppeteer installed with for each task without user profiles, which means It can't access any pages that requires user login.
 
 
 
