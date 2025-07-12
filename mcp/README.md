@@ -249,3 +249,9 @@ node test/test_index_html.js
 - **Accessibility Testing**: Analyzing page accessibility
 - **Performance Monitoring**: Capturing page performance metrics
 - **AI-Assisted Browsing**: Intelligent web navigation and analysis
+
+## Puppeteer restrictions
+
+By default, Puppeteer will launch a new Chromium instance without any user profile, that being said, it can't automatically access the pages require user login.
+
+However, you can manually launch a your Chrome with specified profile in debugging mode, allowing Puppeteer to interact with the current browser tab. For more details, please refer to [CHROME_SETUP.md](CHROME_SETUP.md).
