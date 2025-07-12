@@ -12,7 +12,7 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.join(__dirname, ".env") });
 
 class AnthropicClient {
-  constructor(logger, modelName = "claude-3-5-sonnet-20241022") {
+  constructor(logger) {
     if (!process.env.ANTHROPIC_API_KEY) {
       throw new Error(
         "ANTHROPIC_API_KEY environment variable is not set. Please add it to your .env file."
@@ -30,7 +30,8 @@ class AnthropicClient {
     }
 
     this.logger = logger;
-    this.modelName = modelName;
+    this.modelName =
+      process.env.ANTHROPIC_MODEL || "claude-3-5-sonnet-20241022";
     this.conversationHistory = [];
     this.fullConversationHistory = [];
     this.rawMessagesPosted = [];
