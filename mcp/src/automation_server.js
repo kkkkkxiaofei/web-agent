@@ -12,7 +12,6 @@ class WebAutomationMCPServer {
 
     // Initialize PuppeteerManager with Chrome profile options
     this.puppeteerManager = new PuppeteerManager({
-      headless: options.headless || false,
       timeout: options.timeout || 30000,
       viewport: options.viewport || {
         width: 1280,

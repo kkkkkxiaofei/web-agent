@@ -19,7 +19,7 @@ class PuppeteerManager {
 
     // Configuration options
     this.options = {
-      headless: options.headless || false,
+      headless: process.env.HEADLESS_MODE === "true" || false,
       timeout: options.timeout || 30000,
       viewport: options.viewport || {
         width: 1280,
