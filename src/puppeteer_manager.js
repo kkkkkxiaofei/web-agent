@@ -126,21 +126,17 @@ class PuppeteerManager {
       // Method 1: Try connecting with browserURL (simpler)
       const browserURL = `http://localhost:${this.options.remoteDebuggingPort}`;
 
-      console.log(`Attempting to connect to Chrome at ${browserURL}`);
-
       this.browser = await puppeteer.connect({
         browserURL,
         defaultViewport: null,
       });
 
       console.log(
-        `✅ Connected to existing Chrome on port ${this.options.remoteDebuggingPort}`
+        `Connected to existing Chrome on port ${this.options.remoteDebuggingPort}`
       );
       this.connectedToExisting = true;
       return true;
     } catch (error) {
-      console.log(`Method 1 failed: ${error.message}`);
-
       // Method 2: Try getting WebSocket endpoint manually
       try {
         const response = await fetch(
@@ -153,26 +149,19 @@ class PuppeteerManager {
           (target) => target.type === "browser"
         );
         if (browserTarget && browserTarget.webSocketDebuggerUrl) {
-          console.log(
-            `Trying WebSocket endpoint: ${browserTarget.webSocketDebuggerUrl}`
-          );
-
           this.browser = await puppeteer.connect({
             browserWSEndpoint: browserTarget.webSocketDebuggerUrl,
             defaultViewport: null,
           });
 
-          console.log(`✅ Connected to existing Chrome via WebSocket`);
+          console.log(`Connected to existing Chrome via WebSocket`);
           this.connectedToExisting = true;
           return true;
-        } else {
-          console.log("No suitable browser target found");
         }
       } catch (wsError) {
-        console.log(`Method 2 failed: ${wsError.message}`);
+        // WebSocket connection failed
       }
 
-      console.log(`Could not connect to existing Chrome: All methods failed`);
       return false;
     }
   }
@@ -304,21 +293,14 @@ class PuppeteerManager {
 
       // Strategy 1: Try to connect to existing Chrome with remote debugging
       if (this.options.connectToExisting && this.options.autoDetectChrome) {
-        console.log("🔍 Strategy 1: Checking for existing Chrome instance...");
         const hasExistingChrome = await this.checkExistingChrome();
         if (hasExistingChrome) {
-          console.log("📡 Attempting to connect to existing Chrome...");
           connected = await this.connectToExistingChrome();
-        } else {
-          console.log("❌ No existing Chrome found with remote debugging");
         }
       }
 
       // Strategy 2: Launch with user profile
       if (!connected && this.options.userDataDir) {
-        console.log(
-          "🔍 Strategy 2: Launching Chrome with specified profile..."
-        );
         try {
           connected = await this.launchWithProfile();
         } catch (error) {
@@ -332,7 +314,6 @@ class PuppeteerManager {
         !this.options.userDataDir &&
         this.options.connectToExisting
       ) {
-        console.log("🔍 Strategy 3: Launching Chrome with default profile...");
         try {
           this.options.userDataDir = this.getDefaultChromeUserDataDir();
           connected = await this.launchWithProfile();
@@ -345,9 +326,6 @@ class PuppeteerManager {
 
       // Strategy 4: Launch new Chrome instance (fallback)
       if (!connected) {
-        console.log(
-          "🔍 Strategy 4: Launching new Chrome instance (fallback)..."
-        );
         connected = await this.launchNewChrome();
       }
 
@@ -363,18 +341,7 @@ class PuppeteerManager {
       await this._configurePage();
 
       this.isInitialized = true;
-
-      if (this.connectedToExisting) {
-        console.log(
-          "✅ Connected to existing Chrome browser with your profile and sessions!"
-        );
-      } else if (this.options.userDataDir) {
-        console.log(
-          "✅ Launched Chrome with your profile - your bookmarks and extensions should be available!"
-        );
-      } else {
-        console.log("✅ Launched new Chrome instance");
-      }
+      console.log("Puppeteer browser initialized successfully");
     } catch (error) {
       console.error(`Failed to initialize Puppeteer: ${error.message}`);
       await this._cleanup();
@@ -490,7 +457,6 @@ class PuppeteerManager {
       // Check if URL changed (indicating navigation)
       const newUrl = this.page.url();
       if (currentUrl !== newUrl) {
-        console.log(`Page navigated from ${currentUrl} to ${newUrl}`);
         this.elementMap.clear(); // Clear element map since page changed
       }
 

@@ -139,7 +139,7 @@ class PageHierarchy {
 
       // Helper function to check if element should be included
       function shouldIncludeElement(element) {
-        if (!isVisible(element)) return false;
+        if (!element || !isVisible(element)) return false;
 
         const tagName = element.tagName.toLowerCase();
         const role = element.getAttribute("role");
@@ -173,6 +173,7 @@ class PageHierarchy {
         if (
           textContent &&
           textContent.length > 0 &&
+          element.children &&
           element.children.length === 0
         ) {
           return true;
@@ -230,7 +231,7 @@ class PageHierarchy {
 
         // Get text content
         let text = "";
-        if (element.children.length === 0) {
+        if (!element.children || element.children.length === 0) {
           text = element.textContent?.trim() || "";
         } else {
           // For elements with children, get direct text nodes
@@ -286,11 +287,19 @@ class PageHierarchy {
           metadata.push("selected");
         }
 
-        // Checked state for checkboxes/radio
+        // Checked state for native input checkboxes/radio
         if (
           tagName === "input" &&
           (element.type === "checkbox" || element.type === "radio") &&
           element.checked
+        ) {
+          metadata.push("checked");
+        }
+
+        // Checked state for elements with role="checkbox" or role="radio" using aria-checked
+        if (
+          (role === "checkbox" || role === "radio") &&
+          element.getAttribute("aria-checked") === "true"
         ) {
           metadata.push("checked");
         }
@@ -358,10 +367,12 @@ class PageHierarchy {
 
       // Helper function to process element
       function processElement(element, depth = 0) {
-        if (!shouldIncludeElement(element)) {
+        if (!element || !shouldIncludeElement(element)) {
           // Still process children for elements we don't include
-          for (let child of element.children) {
-            processElement(child, depth);
+          if (element && element.children) {
+            for (let child of element.children) {
+              processElement(child, depth);
+            }
           }
           return;
         }
@@ -409,7 +420,7 @@ class PageHierarchy {
         }
 
         // Add standalone text content for elements with children
-        if (element.children.length > 0) {
+        if (element.children && element.children.length > 0) {
           const textNodes = [];
           for (let node of element.childNodes) {
             if (node.nodeType === Node.TEXT_NODE) {
@@ -426,8 +437,10 @@ class PageHierarchy {
         }
 
         // Process children
-        for (let child of element.children) {
-          processElement(child, depth + 1);
+        if (element.children) {
+          for (let child of element.children) {
+            processElement(child, depth + 1);
+          }
         }
       }
 
@@ -439,7 +452,9 @@ class PageHierarchy {
       result.push(`- document [ref=${documentRef}]:`);
 
       // Process body content
-      processElement(document.body, 1);
+      if (document.body) {
+        processElement(document.body, 1);
+      }
 
       return {
         hierarchy: result.join("\n"),
