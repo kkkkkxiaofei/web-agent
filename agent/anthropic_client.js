@@ -3,7 +3,8 @@ const fs = require("fs");
 require("dotenv").config();
 
 class AnthropicClient {
-  constructor(logger, modelName = "claude-3-5-sonnet-20241022") {
+  constructor(logger) {
+    const modelName = process.env.ANTHROPIC_MODEL || "claude-3-5-sonnet-20241022";
     this.anthropic = new Anthropic({
       apiKey: process.env.ANTHROPIC_API_KEY,
     });
